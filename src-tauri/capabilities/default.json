@@ -3,5 +3,15 @@
   "identifier": "default",
   "description": "Main widget window permissions",
   "windows": ["main"],
-  "permissions": ["core:default", "autostart:allow-enable", "autostart:allow-disable", "autostart:allow-is-enabled"]
+  "permissions": [
+    "core:default",
+    "core:window:allow-hide",
+    "core:window:allow-set-always-on-top",
+    "core:window:allow-set-resizable",
+    "core:window:allow-set-size",
+    "autostart:allow-enable",
+    "autostart:allow-disable",
+    "autostart:allow-is-enabled",
+    "window-state:default"
+  ]
 }

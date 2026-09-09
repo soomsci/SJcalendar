@@ -4,7 +4,7 @@ const labels: Record<EventKind, string> = { academic: '학사', assessment: '평
 
 export function EventRow({ event, onSelect }: { event: CalendarEvent; onSelect: (event: CalendarEvent) => void }) {
   const time = event.allDay ? '하루 종일' : `${event.startTime}${event.endTime ? `–${event.endTime}` : ''}`;
-  return <button className={`event event--${event.kind}`} onClick={() => onSelect(event)}>
+  return <button type="button" className={`event event--${event.kind}`} onClick={() => onSelect(event)} aria-label={`${event.title}, ${labels[event.kind]}, ${time}`}>
     <span className="event__kind">{labels[event.kind]}</span><span className="event__title">{event.title}</span><span className="event__time">{time}</span>
   </button>;
 }
