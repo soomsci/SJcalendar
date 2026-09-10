@@ -1,6 +1,20 @@
-# 위젯 일정 조회 API 계약 초안
+# 위젯 일정 조회 및 기기 인증 API 계약
 
-이 문서는 아직 구현되지 않은 서버 API의 계약 초안이다. 이 프로젝트는 모의 데이터만 사용하며, Neon 또는 SJOWS 데이터베이스에 연결하지 않는다.
+운영 서버 기준 주소는 `https://sjows.vercel.app`이다. 위젯은 Rust 계층에서만 HTTPS 통신과 인증을
+처리하며 Neon 또는 SJOWS 데이터베이스에 직접 연결하지 않는다.
+
+## 기기 연결
+
+1. `POST /api/widget/device/start`에 기기 이름을 보내 연결 코드와 브라우저 승인 주소를 받는다.
+2. 기본 브라우저에서 교직원이 기기 이름과 코드를 확인하고 승인한다.
+3. `POST /api/widget/device/token`을 서버가 지정한 간격으로 폴링한다.
+4. 승인 뒤 받은 액세스 토큰으로 일정 API를 호출하고 회전형 갱신 토큰으로 인증을 갱신한다.
+5. 로그아웃 때 `POST /api/widget/device/revoke`를 호출하고 로컬 자격 증명을 삭제한다.
+
+갱신 토큰은 Windows 자격 증명 저장소에만 보관한다. 액세스·갱신 토큰은 React 상태,
+`localStorage`, 설정 파일이나 로그에 기록하지 않는다.
+
+## 일정 조회
 
 `GET /api/widget/calendar?from=2026-09-08&to=2026-09-14`
 

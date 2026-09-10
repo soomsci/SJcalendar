@@ -5,5 +5,10 @@
   "identifier": "kr.hs.samsung.calendarwidget",
   "build": { "beforeDevCommand": "npm run dev", "devUrl": "http://localhost:1420", "beforeBuildCommand": "npm run build", "frontendDist": "../dist" },
   "app": { "windows": [{ "label": "main", "title": "삼정 학사일정", "width": 340, "height": 420, "minWidth": 280, "minHeight": 220, "decorations": false, "resizable": true, "alwaysOnTop": false, "visible": true }] },
-  "bundle": { "active": true, "targets": "nsis", "windows": { "nsis": { "installerMode": "currentUser" } } }
+  "bundle": {
+    "active": true,
+    "targets": "nsis",
+    "icon": ["icons/icon.ico"],
+    "windows": { "nsis": { "installMode": "currentUser" } }
+  }
 }
