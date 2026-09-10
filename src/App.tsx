@@ -20,6 +20,15 @@ function commandError(error: unknown): Required<CommandError> {
   return { code: 'UNKNOWN', message: typeof error === 'string' ? error : '요청을 처리하지 못했습니다.' };
 }
 
+function errorMessage(error: unknown): string {
+  const parsed = commandError(error);
+  return parsed.code === 'UNKNOWN' ? parsed.message : `${parsed.message} (${parsed.code})`;
+}
+
+function nextPaint(): Promise<void> {
+  return new Promise((resolve) => window.requestAnimationFrame(() => resolve()));
+}
+
 function updatedLabel(value: string): string {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? '방금 전' : date.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' });
@@ -77,17 +86,25 @@ export default function App() {
   const startConnection = useCallback(async () => {
     if (busy) return;
     setBusy(true);
+    setConnection(null);
     setConnectionState('connecting');
-    setMessage('연결 코드를 만들고 있습니다.');
+    setMessage('서버에 연결 코드를 요청하고 있습니다. 최대 15초 정도 걸릴 수 있습니다.');
     try {
+      // Paint the click feedback before waiting for the native HTTPS request.
+      await nextPaint();
       const started = await invoke<DeviceConnection>('start_device_connection');
       setConnection(started);
       setConnectionState('pending');
       setMessage('브라우저에서 기기 연결을 승인해 주세요.');
-      await invoke('open_connection_page', { url: started.verificationUrl });
+      try {
+        await invoke('open_connection_page', { url: started.verificationUrl });
+      } catch (openError) {
+        setConnectionState('error');
+        setMessage(`${errorMessage(openError)} 아래 버튼으로 승인 페이지를 다시 열어 주세요.`);
+      }
     } catch (rawError) {
       setConnectionState('error');
-      setMessage(commandError(rawError).message);
+      setMessage(errorMessage(rawError));
     } finally {
       setBusy(false);
     }
@@ -112,7 +129,7 @@ export default function App() {
         setConnectionState('disconnected');
         setMessage('학교 계정을 연결하면 최신 학사일정을 확인할 수 있습니다.');
       })
-      .catch((error) => { setConnectionState('error'); setMessage(commandError(error).message); });
+      .catch((error) => { setConnectionState('error'); setMessage(errorMessage(error)); });
   }, [refresh]);
 
   useEffect(() => {
@@ -141,7 +158,7 @@ export default function App() {
         if (cancelled) return;
         setConnection(null);
         setConnectionState('error');
-        setMessage(commandError(error).message);
+        setMessage(errorMessage(error));
       }
     }, connection.interval * 1000);
     return () => { cancelled = true; window.clearTimeout(timer); };
