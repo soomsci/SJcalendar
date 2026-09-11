@@ -3,5 +3,12 @@
   "identifier": "default",
   "description": "Main widget window permissions",
   "windows": ["main"],
-  "permissions": ["core:default", "autostart:allow-enable", "autostart:allow-disable", "autostart:allow-is-enabled"]
+  "permissions": [
+    "core:default",
+    "core:window:allow-start-dragging",
+    "core:window:allow-start-resize-dragging",
+    "autostart:allow-enable",
+    "autostart:allow-disable",
+    "autostart:allow-is-enabled"
+  ]
 }

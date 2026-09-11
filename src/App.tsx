@@ -1,9 +1,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { MouseEvent as ReactMouseEvent } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { addDays, eventsForSevenDays, formatKoreanDate, seoulToday } from './calendar/events';
-import type { CalendarEvent } from './calendar/types';
-import { EventRow } from './components/EventRow';
+import { getCurrentWindow } from '@tauri-apps/api/window';
+import {
+  eventsForRange,
+  formatKoreanDate,
+  formatViewHeading,
+  seoulToday,
+  shiftViewAnchor,
+  viewRange,
+} from './calendar/events';
+import type { CalendarEvent, CalendarView } from './calendar/types';
+import { CalendarViews } from './components/CalendarViews';
+import { WindowResizeHandles } from './components/WindowResizeHandles';
 import './styles.css';
 
 interface CommandError { code?: string; message?: string }
@@ -11,6 +21,13 @@ interface DeviceConnection { userCode: string; verificationUrl: string; expiresI
 interface PollStatus { status: 'pending' | 'connected'; retryAfter: number }
 interface CalendarResponse { schemaVersion: number; timezone: string; generatedAt: string; events: CalendarEvent[] }
 type ConnectionState = 'checking' | 'disconnected' | 'connecting' | 'pending' | 'connected' | 'offline' | 'error';
+
+const VIEW_LABELS: Record<CalendarView, string> = { list: '목록', month: '월간', week: '주간' };
+
+function savedView(): CalendarView {
+  const value = window.localStorage.getItem('calendar-view');
+  return value === 'month' || value === 'week' ? value : 'list';
+}
 
 function commandError(error: unknown): Required<CommandError> {
   if (error && typeof error === 'object') {
@@ -38,6 +55,8 @@ export default function App() {
   const [collapsed, setCollapsed] = useState(false);
   const [selected, setSelected] = useState<CalendarEvent | null>(null);
   const [today, setToday] = useState(() => seoulToday());
+  const [anchor, setAnchor] = useState(() => seoulToday());
+  const [view, setView] = useState<CalendarView>(savedView);
   const [events, setEvents] = useState<CalendarEvent[]>([]);
   const [updatedAt, setUpdatedAt] = useState('갱신 전');
   const [connectionState, setConnectionState] = useState<ConnectionState>('checking');
@@ -45,24 +64,27 @@ export default function App() {
   const [message, setMessage] = useState('저장된 로그인을 확인하고 있습니다.');
   const [busy, setBusy] = useState(false);
   const initialized = useRef(false);
+  const requestInFlight = useRef(false);
 
-  const visibleEvents = useMemo(() => eventsForSevenDays(events, today), [events, today]);
-  const todayEvents = visibleEvents.filter((event) => event.date <= today && (event.endDate ?? event.date) >= today);
-  const byDate = visibleEvents.reduce<Record<string, CalendarEvent[]>>((groups, event) => {
-    const date = event.date < today ? today : event.date;
-    (groups[date] ??= []).push(event);
-    return groups;
-  }, {});
-  const next = visibleEvents[0];
+  const range = useMemo(() => viewRange(view, anchor), [anchor, view]);
+  const visibleEvents = useMemo(() => eventsForRange(events, range), [events, range]);
+  const next = useMemo(
+    () => eventsForRange(events, { from: today, to: '9999-12-31' })[0],
+    [events, today],
+  );
+  const showCalendar = connectionState === 'connected' || connectionState === 'offline' || events.length > 0;
 
   const refresh = useCallback(async () => {
-    if (busy) return;
+    if (requestInFlight.current) return;
+    requestInFlight.current = true;
     setBusy(true);
     const currentToday = seoulToday();
     setToday(currentToday);
     try {
-      const response = await invoke<CalendarResponse>('fetch_calendar', { from: currentToday, to: addDays(currentToday, 6) });
-      if (response.schemaVersion !== 1 || response.timezone !== 'Asia/Seoul') throw { code: 'INVALID_RESPONSE', message: '지원하지 않는 일정 형식입니다.' };
+      const response = await invoke<CalendarResponse>('fetch_calendar', { from: range.from, to: range.to });
+      if (response.schemaVersion !== 1 || response.timezone !== 'Asia/Seoul') {
+        throw { code: 'INVALID_RESPONSE', message: '지원하지 않는 일정 형식입니다.' };
+      }
       setEvents(response.events);
       setUpdatedAt(updatedLabel(response.generatedAt));
       setConnectionState('connected');
@@ -77,20 +99,21 @@ export default function App() {
       } else {
         setConnectionState('error');
       }
-      setMessage(error.message);
+      setMessage(errorMessage(rawError));
     } finally {
+      requestInFlight.current = false;
       setBusy(false);
     }
-  }, [busy, events.length]);
+  }, [events.length, range]);
 
   const startConnection = useCallback(async () => {
-    if (busy) return;
+    if (requestInFlight.current) return;
+    requestInFlight.current = true;
     setBusy(true);
     setConnection(null);
     setConnectionState('connecting');
     setMessage('서버에 연결 코드를 요청하고 있습니다. 최대 15초 정도 걸릴 수 있습니다.');
     try {
-      // Paint the click feedback before waiting for the native HTTPS request.
       await nextPaint();
       const started = await invoke<DeviceConnection>('start_device_connection');
       setConnection(started);
@@ -106,9 +129,10 @@ export default function App() {
       setConnectionState('error');
       setMessage(errorMessage(rawError));
     } finally {
+      requestInFlight.current = false;
       setBusy(false);
     }
-  }, [busy]);
+  }, []);
 
   const logout = useCallback(async () => {
     try { await invoke('logout'); } catch { /* Clear local UI even when remote revocation is unavailable. */ }
@@ -119,6 +143,17 @@ export default function App() {
     setConnectionState('disconnected');
     setMessage('로그아웃했습니다. 다시 연결하면 일정을 확인할 수 있습니다.');
   }, []);
+
+  const changeView = (nextView: CalendarView) => {
+    setView(nextView);
+    window.localStorage.setItem('calendar-view', nextView);
+  };
+
+  const startWindowDrag = (event: ReactMouseEvent<HTMLElement>) => {
+    if (event.button !== 0 || (event.target as HTMLElement).closest('button')) return;
+    event.preventDefault();
+    void getCurrentWindow().startDragging();
+  };
 
   useEffect(() => {
     if (initialized.current) return;
@@ -131,6 +166,11 @@ export default function App() {
       })
       .catch((error) => { setConnectionState('error'); setMessage(errorMessage(error)); });
   }, [refresh]);
+
+  useEffect(() => {
+    if (connectionState !== 'connected') return;
+    void refresh();
+  }, [range.from, range.to]);
 
   useEffect(() => {
     if (connectionState !== 'connected') return;
@@ -148,7 +188,6 @@ export default function App() {
         if (cancelled) return;
         if (result.status === 'connected') {
           setConnection(null);
-          setConnectionState('connected');
           setMessage('연결되었습니다. 일정을 불러옵니다.');
           await refresh();
         } else {
@@ -170,22 +209,64 @@ export default function App() {
     return () => { void unlistenRefresh.then((unlisten) => unlisten()); void unlistenLogout.then((unlisten) => unlisten()); };
   }, [logout, refresh]);
 
-  return <main className={collapsed ? 'widget widget--collapsed' : 'widget'}>
-    <header data-tauri-drag-region className="header"><div><p className="eyebrow">삼정중학교</p><h1>{formatKoreanDate(today)}</h1></div><button className="icon" onClick={() => setCollapsed(!collapsed)} aria-label={collapsed ? '펼치기' : '접기'}>{collapsed ? '⌄' : '−'}</button></header>
-    {collapsed ? <section className="collapsed-next"><span>다음 일정</span><strong>{next?.title ?? '등록된 일정이 없습니다'}</strong></section> : <>
-      {(connectionState === 'disconnected' || connectionState === 'connecting' || connectionState === 'pending' || connectionState === 'error') && events.length === 0 && <section className="connection" aria-live="polite">
-        <h2>{connectionState === 'pending' ? '브라우저에서 연결 승인' : '학교 계정 연결'}</h2>
-        <p>{message}</p>
-        {connection && <strong className="connection__code">{connection.userCode}</strong>}
-        {connection ? <button disabled={busy} onClick={() => { setConnectionState('pending'); void invoke('open_connection_page', { url: connection.verificationUrl }); }}>승인 페이지 다시 열기</button> : <button disabled={busy} onClick={startConnection}>{busy ? '연결 중…' : '학교 계정으로 연결'}</button>}
-      </section>}
-      {events.length > 0 && <>
-        <section className="today"><h2>오늘</h2>{todayEvents.length ? todayEvents.map((event) => <EventRow key={event.id} event={event} onSelect={setSelected} />) : <p className="empty">오늘 등록된 일정이 없습니다</p>}</section>
-        <section className="upcoming"><h2>향후 7일</h2>{Object.entries(byDate).map(([date, items]) => <div className="day" key={date}><h3>{formatKoreanDate(date)}</h3>{items.map((event) => <EventRow key={event.id} event={event} onSelect={setSelected} />)}</div>)}</section>
-      </>}
-      {(connectionState === 'offline' || connectionState === 'error') && events.length > 0 && <p className="status" role="status">{message} 마지막으로 받은 일정을 표시합니다.</p>}
-      <footer><span>마지막 갱신: {updatedAt}</span><button disabled={busy} onClick={refresh}>새로고침</button><button onClick={() => void invoke('open_office_calendar')}>교무실 열기</button></footer>
-    </>}
-    {selected && <div className="modal" role="dialog" aria-modal="true" aria-label="일정 상세"><div><button className="close" onClick={() => setSelected(null)} aria-label="닫기">×</button><p className="eyebrow">일정 상세</p><h2>{selected.title}</h2><p>{formatKoreanDate(selected.date)}{selected.endDate ? ` ~ ${formatKoreanDate(selected.endDate)}` : ''}</p><p>{selected.allDay ? '하루 종일' : `${selected.startTime}${selected.endTime ? `–${selected.endTime}` : ''}`}</p>{selected.description && <p>{selected.description}</p>}<button onClick={() => void invoke('open_office_calendar')}>교무실에서 보기</button></div></div>}
-  </main>;
+  return (
+    <main className={collapsed ? 'widget widget--collapsed' : 'widget'}>
+      <header className="header" onMouseDown={startWindowDrag}>
+        <div>
+          <p className="eyebrow">삼정중학교</p>
+          <h1>{formatKoreanDate(today)}</h1>
+        </div>
+        <button className="icon" onClick={() => setCollapsed(!collapsed)} aria-label={collapsed ? '펼치기' : '접기'}>{collapsed ? '⌄' : '−'}</button>
+      </header>
+
+      {collapsed
+        ? <section className="collapsed-next"><span>다음 일정</span><strong>{next?.title ?? '등록된 일정이 없습니다'}</strong></section>
+        : <>
+          {showCalendar && <section className="calendar-toolbar" aria-label="일정 보기 설정">
+            <div className="view-tabs" role="tablist" aria-label="보기 방식">
+              {(Object.keys(VIEW_LABELS) as CalendarView[]).map((mode) => (
+                <button
+                  aria-selected={view === mode}
+                  className={view === mode ? 'is-active' : ''}
+                  disabled={busy}
+                  key={mode}
+                  onClick={() => changeView(mode)}
+                  role="tab"
+                >{VIEW_LABELS[mode]}</button>
+              ))}
+            </div>
+            <div className="period-nav">
+              <button aria-label="이전 기간" disabled={busy} onClick={() => setAnchor((value) => shiftViewAnchor(view, value, -1))}>‹</button>
+              <strong>{formatViewHeading(view, anchor)}</strong>
+              <button aria-label="다음 기간" disabled={busy} onClick={() => setAnchor((value) => shiftViewAnchor(view, value, 1))}>›</button>
+              <button className="today-button" disabled={busy} onClick={() => setAnchor(seoulToday())}>오늘</button>
+            </div>
+          </section>}
+
+          {(connectionState === 'disconnected' || connectionState === 'connecting' || connectionState === 'pending' || connectionState === 'error') && events.length === 0 && <section className="connection" aria-live="polite">
+            <h2>{connectionState === 'pending' ? '브라우저에서 연결 승인' : '학교 계정 연결'}</h2>
+            <p>{message}</p>
+            {connection && <strong className="connection__code">{connection.userCode}</strong>}
+            {connection
+              ? <button disabled={busy} onClick={() => { setConnectionState('pending'); void invoke('open_connection_page', { url: connection.verificationUrl }); }}>승인 페이지 다시 열기</button>
+              : <button disabled={busy} onClick={() => void startConnection()}>{busy ? '연결 중…' : '학교 계정으로 연결'}</button>}
+          </section>}
+
+          {showCalendar && <section className="calendar-content">
+            <CalendarViews view={view} anchor={anchor} today={today} events={visibleEvents} onSelect={setSelected} />
+          </section>}
+
+          {(connectionState === 'offline' || connectionState === 'error') && events.length > 0 && <p className="status" role="status">{message} 마지막으로 받은 일정을 표시합니다.</p>}
+
+          <footer>
+            <span>마지막 갱신: {updatedAt}</span>
+            <button disabled={busy} onClick={() => void refresh()}>새로고침</button>
+            <button onClick={() => void invoke('open_office_calendar')}>교무실 열기</button>
+          </footer>
+        </>}
+
+      {selected && <div className="modal" role="dialog" aria-modal="true" aria-label="일정 상세"><div><button className="close" onClick={() => setSelected(null)} aria-label="닫기">×</button><p className="eyebrow">일정 상세</p><h2>{selected.title}</h2><p>{formatKoreanDate(selected.date)}{selected.endDate ? ` ~ ${formatKoreanDate(selected.endDate)}` : ''}</p><p>{selected.allDay ? '하루 종일' : `${selected.startTime}${selected.endTime ? `–${selected.endTime}` : ''}`}</p>{selected.description && <p>{selected.description}</p>}<button onClick={() => void invoke('open_office_calendar')}>교무실에서 보기</button></div></div>}
+      <WindowResizeHandles />
+    </main>
+  );
 }

@@ -1,4 +1,10 @@
 export type EventKind = 'academic' | 'assessment' | 'activity' | 'holiday';
+export type CalendarView = 'list' | 'month' | 'week';
+
+export interface DateRange {
+  from: string;
+  to: string;
+}
 
 export interface CalendarEvent {
   id: string;
