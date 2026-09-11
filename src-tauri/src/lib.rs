@@ -23,6 +23,7 @@ pub fn run() {
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             None::<Vec<&str>>,
         ))
+        .plugin(tauri_plugin_store::Builder::default().build())
         .setup(|app| {
             let show = MenuItem::with_id(app, "show", "표시/숨기기", true, None::<&str>)?;
             let refresh = MenuItem::with_id(app, "refresh", "새로고침", true, None::<&str>)?;
