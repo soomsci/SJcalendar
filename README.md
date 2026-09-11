@@ -23,3 +23,6 @@ Node.js와 npm을 설치한 뒤 `npm install`, `npm run dev`를 실행한다. Ta
 
 서버 연동 계약은 [docs/API_CONTRACT.md](docs/API_CONTRACT.md)에 있다. 이 저장소는 DB 접속 정보나
 운영 비밀값을 포함하지 않는다.
+
+소수 교직원용 자체 서명판의 인증서 설치와 재빌드 방법은
+[docs/INTERNAL_SIGNED_INSTALL.md](docs/INTERNAL_SIGNED_INSTALL.md)에 있다.
