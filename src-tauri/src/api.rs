@@ -711,6 +711,13 @@ mod tests {
         .unwrap();
         assert!(google.starts_with("https://calendar.google.com/calendar/ical/"));
 
+        let google_public = normalize_external_calendar_url(
+            "google",
+            "https://calendar.google.com/calendar/ical/name%40example.com/public/basic.ics",
+        )
+        .unwrap();
+        assert!(google_public.ends_with("/public/basic.ics"));
+
         let apple = normalize_external_calendar_url(
             "apple",
             "webcal://p123-caldav.icloud.com/published/2/example-token",

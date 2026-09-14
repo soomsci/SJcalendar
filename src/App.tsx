@@ -38,6 +38,7 @@ interface PollStatus { status: 'pending' | 'connected'; retryAfter: number }
 interface CalendarResponse { schemaVersion: number; timezone: string; generatedAt: string; events: CalendarEvent[] }
 interface ExternalCalendarStatus { provider: string | null }
 interface ExternalCalendarFeed { provider: string; ical: string }
+interface ToastNotice { id: number; message: string; tone: 'warning' | 'error' }
 type ConnectionState = 'checking' | 'disconnected' | 'connecting' | 'pending' | 'connected' | 'offline' | 'error';
 
 const VIEW_LABELS: Record<CalendarView, string> = { list: '목록', month: '월간', week: '주간' };
@@ -95,8 +96,15 @@ export default function App() {
   const [connection, setConnection] = useState<DeviceConnection | null>(null);
   const [message, setMessage] = useState('저장된 로그인을 확인하고 있습니다.');
   const [busy, setBusy] = useState(false);
+  const [toast, setToast] = useState<ToastNotice | null>(null);
   const initialized = useRef(false);
   const requestInFlight = useRef(false);
+  const nextToastId = useRef(0);
+
+  const showToast = useCallback((message: string, tone: ToastNotice['tone']) => {
+    nextToastId.current += 1;
+    setToast({ id: nextToastId.current, message, tone });
+  }, []);
 
   const range = useMemo(() => viewRange(view, anchor), [anchor, view]);
   const events = useMemo<CalendarEvent[]>(
@@ -310,6 +318,30 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (!toast) return;
+    const timer = window.setTimeout(() => setToast((current) => current?.id === toast.id ? null : current), 4500);
+    return () => window.clearTimeout(timer);
+  }, [toast]);
+
+  useEffect(() => {
+    if (personalStorageError && personalEditor === undefined) {
+      showToast(personalStorageError, 'error');
+    }
+  }, [personalEditor, personalStorageError, showToast]);
+
+  useEffect(() => {
+    if (externalError && !externalCalendarOpen) {
+      showToast(`외부 캘린더: ${externalError}`, 'error');
+    }
+  }, [externalCalendarOpen, externalError, showToast]);
+
+  useEffect(() => {
+    if (connectionState === 'offline' && schoolEvents.length > 0) {
+      showToast(`${message} 마지막으로 받은 학교 일정을 표시합니다.`, 'warning');
+    }
+  }, [connectionState, message, schoolEvents.length, showToast]);
+
+  useEffect(() => {
     let cancelled = false;
     invoke<ExternalCalendarStatus>('external_calendar_status')
       .then((status) => {
@@ -449,10 +481,6 @@ export default function App() {
             <CalendarViews view={view} anchor={anchor} today={today} events={visibleEvents} onSelect={setSelected} />
           </section>}
 
-          {personalStorageError && personalEditor === undefined && <p className="status status--error" role="alert">{personalStorageError}</p>}
-          {externalError && !externalCalendarOpen && <p className="status status--error" role="alert">외부 캘린더: {externalError}</p>}
-          {connectionState === 'offline' && schoolEvents.length > 0 && <p className="status" role="status">{message} 마지막으로 받은 학교 일정을 표시합니다.</p>}
-
           <footer>
             <span>마지막 갱신: {updatedAt}</span>
             <button onClick={() => setExternalCalendarOpen(true)}>
@@ -485,6 +513,11 @@ export default function App() {
         onConnect={connectExternal}
         onDisconnect={disconnectExternal}
       />}
+      {toast && <div key={toast.id} className={`toast toast--${toast.tone}`} role={toast.tone === 'error' ? 'alert' : 'status'} aria-live={toast.tone === 'error' ? 'assertive' : 'polite'}>
+        <span aria-hidden="true">{toast.tone === 'error' ? '!' : 'i'}</span>
+        <p>{toast.message}</p>
+        <button type="button" onClick={() => setToast(null)} aria-label="알림 닫기">×</button>
+      </div>}
       <WindowResizeHandles />
     </main>
   );

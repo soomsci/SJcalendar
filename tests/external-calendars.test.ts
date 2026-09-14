@@ -9,6 +9,7 @@ import {
 test('offers Google and Apple calendar setup choices', () => {
   assert.deepEqual(EXTERNAL_CALENDAR_PROVIDERS.map(({ id }) => id), ['google', 'apple']);
   assert.equal(externalCalendarProvider('google').method, 'iCalendar 공유 링크 · 읽기 전용');
+  assert.match(externalCalendarProvider('google').summary, /비공개 또는 공개/);
   assert.match(externalCalendarProvider('google').caution, /캘린더 열람 권한과 같습니다/);
   assert.match(externalCalendarProvider('apple').caution, /링크를 아는 누구나 볼 수 있습니다/);
 });
