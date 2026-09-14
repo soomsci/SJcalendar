@@ -1,5 +1,5 @@
 use keyring::{Entry, Error as KeyringError};
-use reqwest::{Client, StatusCode};
+use reqwest::{redirect::Policy, Client, StatusCode};
 use serde::{Deserialize, Serialize};
 use std::{
     env,
@@ -12,7 +12,9 @@ use url::Url;
 const SERVER_ORIGIN: &str = "https://sjows.vercel.app";
 const CREDENTIAL_SERVICE: &str = "kr.hs.samsung.calendarwidget";
 const CREDENTIAL_ACCOUNT: &str = "sjows-refresh-token";
+const EXTERNAL_CALENDAR_ACCOUNT: &str = "external-calendar-subscription";
 const DEVICE_GRANT: &str = "urn:ietf:params:oauth:grant-type:device_code";
+const MAX_ICAL_BYTES: u64 = 5 * 1024 * 1024;
 const GOOGLE_CALENDAR_HELP: &str = "https://support.google.com/calendar/answer/37648";
 const APPLE_CALENDAR_HELP: &str =
     "https://support.apple.com/guide/iphone/share-icloud-calendars-iph7613c4fb/ios";
@@ -33,6 +35,7 @@ struct PendingConnection {
 
 pub struct ApiState {
     client: Client,
+    external_client: Client,
     auth: Mutex<AuthState>,
 }
 
@@ -43,8 +46,15 @@ impl ApiState {
             .user_agent(concat!("SJcalendar/", env!("CARGO_PKG_VERSION")))
             .build()
             .expect("failed to create HTTP client");
+        let external_client = Client::builder()
+            .timeout(Duration::from_secs(20))
+            .user_agent(concat!("SJcalendar/", env!("CARGO_PKG_VERSION")))
+            .redirect(Policy::none())
+            .build()
+            .expect("failed to create external calendar HTTP client");
         Self {
             client,
+            external_client,
             auth: Mutex::new(AuthState::default()),
         }
     }
@@ -138,6 +148,26 @@ pub struct CalendarResponse {
     events: Vec<CalendarEvent>,
 }
 
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ExternalCalendarSubscription {
+    provider: String,
+    url: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExternalCalendarStatus {
+    provider: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExternalCalendarFeed {
+    provider: String,
+    ical: String,
+}
+
 fn unix_seconds() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -151,6 +181,184 @@ fn credential_entry() -> CommandResult<Entry> {
             "CREDENTIAL_ERROR",
             "Windows 자격 증명 저장소를 열 수 없습니다.",
         )
+    })
+}
+
+fn external_calendar_entry() -> CommandResult<Entry> {
+    Entry::new(CREDENTIAL_SERVICE, EXTERNAL_CALENDAR_ACCOUNT).map_err(|_| {
+        CommandError::new(
+            "CREDENTIAL_ERROR",
+            "외부 캘린더 보호 저장소를 열 수 없습니다.",
+        )
+    })
+}
+
+fn normalize_external_calendar_url(provider: &str, value: &str) -> CommandResult<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() || trimmed.len() > 4096 {
+        return Err(CommandError::new(
+            "INVALID_CALENDAR_URL",
+            "공유 링크를 확인해 주세요.",
+        ));
+    }
+    let candidate = if let Some(rest) = trimmed.strip_prefix("webcal://") {
+        format!("https://{rest}")
+    } else {
+        trimmed.to_string()
+    };
+    let parsed = Url::parse(&candidate).map_err(|_| {
+        CommandError::new(
+            "INVALID_CALENDAR_URL",
+            "공유 링크 형식이 올바르지 않습니다.",
+        )
+    })?;
+    if parsed.scheme() != "https"
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || parsed.port().is_some()
+    {
+        return Err(CommandError::new(
+            "INVALID_CALENDAR_URL",
+            "HTTPS 캘린더 공유 링크만 사용할 수 있습니다.",
+        ));
+    }
+    let host = parsed.host_str().unwrap_or_default().to_ascii_lowercase();
+    let valid = match provider {
+        "google" => {
+            host == "calendar.google.com"
+                && parsed.path().starts_with("/calendar/ical/")
+                && parsed.path().ends_with(".ics")
+        }
+        "apple" => {
+            (host == "icloud.com" || host.ends_with(".icloud.com"))
+                && parsed.path().starts_with("/published/")
+        }
+        _ => false,
+    };
+    if !valid {
+        return Err(CommandError::new(
+            "INVALID_CALENDAR_URL",
+            "선택한 서비스에서 만든 iCalendar 공유 링크를 사용해 주세요.",
+        ));
+    }
+    Ok(parsed.to_string())
+}
+
+fn read_external_calendar_subscription() -> CommandResult<Option<ExternalCalendarSubscription>> {
+    let value = match external_calendar_entry()?.get_password() {
+        Ok(value) => value,
+        Err(KeyringError::NoEntry) => return Ok(None),
+        Err(_) => {
+            return Err(CommandError::new(
+                "CREDENTIAL_ERROR",
+                "저장된 외부 캘린더 연결을 읽을 수 없습니다.",
+            ));
+        }
+    };
+    let mut subscription: ExternalCalendarSubscription =
+        serde_json::from_str(&value).map_err(|_| {
+            CommandError::new(
+                "INVALID_SUBSCRIPTION",
+                "저장된 외부 캘린더 연결 정보가 올바르지 않습니다.",
+            )
+        })?;
+    subscription.url = normalize_external_calendar_url(&subscription.provider, &subscription.url)?;
+    Ok(Some(subscription))
+}
+
+fn save_external_calendar_subscription(
+    subscription: &ExternalCalendarSubscription,
+) -> CommandResult<()> {
+    let value = serde_json::to_string(subscription).map_err(|_| {
+        CommandError::new(
+            "CREDENTIAL_ERROR",
+            "외부 캘린더 연결을 저장하지 못했습니다.",
+        )
+    })?;
+    external_calendar_entry()?
+        .set_password(&value)
+        .map_err(|_| {
+            CommandError::new(
+                "CREDENTIAL_ERROR",
+                "외부 캘린더 연결을 안전하게 저장하지 못했습니다.",
+            )
+        })
+}
+
+fn delete_external_calendar_subscription() -> CommandResult<()> {
+    match external_calendar_entry()?.delete_credential() {
+        Ok(()) | Err(KeyringError::NoEntry) => Ok(()),
+        Err(_) => Err(CommandError::new(
+            "CREDENTIAL_ERROR",
+            "외부 캘린더 연결을 삭제하지 못했습니다.",
+        )),
+    }
+}
+
+async fn download_external_calendar(
+    state: &ApiState,
+    subscription: &ExternalCalendarSubscription,
+) -> CommandResult<ExternalCalendarFeed> {
+    let mut response = state
+        .external_client
+        .get(&subscription.url)
+        .header(reqwest::header::ACCEPT, "text/calendar")
+        .send()
+        .await
+        .map_err(|_| {
+            CommandError::new(
+                "EXTERNAL_CALENDAR_NETWORK_ERROR",
+                "캘린더 공유 링크에 연결할 수 없습니다.",
+            )
+        })?;
+    if response.status().is_redirection() {
+        return Err(CommandError::new(
+            "EXTERNAL_CALENDAR_REDIRECT",
+            "다른 주소로 이동하는 공유 링크는 사용할 수 없습니다.",
+        ));
+    }
+    if !response.status().is_success() {
+        return Err(CommandError::new(
+            "EXTERNAL_CALENDAR_FAILED",
+            "공유 캘린더를 가져오지 못했습니다. 링크와 공유 상태를 확인해 주세요.",
+        ));
+    }
+    if response.content_length().unwrap_or_default() > MAX_ICAL_BYTES {
+        return Err(CommandError::new(
+            "EXTERNAL_CALENDAR_TOO_LARGE",
+            "공유 캘린더 데이터가 너무 큽니다.",
+        ));
+    }
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|_| {
+        CommandError::new(
+            "EXTERNAL_CALENDAR_FAILED",
+            "공유 캘린더 데이터를 읽지 못했습니다.",
+        )
+    })? {
+        if bytes.len().saturating_add(chunk.len()) > MAX_ICAL_BYTES as usize {
+            return Err(CommandError::new(
+                "EXTERNAL_CALENDAR_TOO_LARGE",
+                "공유 캘린더 데이터가 너무 큽니다.",
+            ));
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    let ical = String::from_utf8(bytes).map_err(|_| {
+        CommandError::new(
+            "INVALID_CALENDAR_DATA",
+            "공유 링크가 UTF-8 iCalendar 데이터를 반환하지 않았습니다.",
+        )
+    })?;
+    if !ical.contains("BEGIN:VCALENDAR") || !ical.contains("END:VCALENDAR") {
+        return Err(CommandError::new(
+            "INVALID_CALENDAR_DATA",
+            "공유 링크가 iCalendar 데이터를 반환하지 않았습니다.",
+        ));
+    }
+    Ok(ExternalCalendarFeed {
+        provider: subscription.provider.clone(),
+        ical,
     })
 }
 
@@ -329,6 +537,52 @@ pub async fn open_calendar_help(provider: String) -> CommandResult<()> {
 }
 
 #[tauri::command]
+pub async fn external_calendar_status() -> CommandResult<ExternalCalendarStatus> {
+    Ok(ExternalCalendarStatus {
+        provider: read_external_calendar_subscription()?.map(|subscription| subscription.provider),
+    })
+}
+
+#[tauri::command]
+pub async fn connect_external_calendar(
+    provider: String,
+    url: String,
+    state: State<'_, ApiState>,
+) -> CommandResult<ExternalCalendarFeed> {
+    let subscription = ExternalCalendarSubscription {
+        url: normalize_external_calendar_url(&provider, &url)?,
+        provider,
+    };
+    download_external_calendar(&state, &subscription).await
+}
+
+#[tauri::command]
+pub async fn save_external_calendar_connection(provider: String, url: String) -> CommandResult<()> {
+    save_external_calendar_subscription(&ExternalCalendarSubscription {
+        url: normalize_external_calendar_url(&provider, &url)?,
+        provider,
+    })
+}
+
+#[tauri::command]
+pub async fn fetch_external_calendar(
+    state: State<'_, ApiState>,
+) -> CommandResult<ExternalCalendarFeed> {
+    let subscription = read_external_calendar_subscription()?.ok_or_else(|| {
+        CommandError::new(
+            "EXTERNAL_CALENDAR_NOT_CONNECTED",
+            "연결된 외부 캘린더가 없습니다.",
+        )
+    })?;
+    download_external_calendar(&state, &subscription).await
+}
+
+#[tauri::command]
+pub async fn disconnect_external_calendar() -> CommandResult<()> {
+    delete_external_calendar_subscription()
+}
+
+#[tauri::command]
 pub async fn poll_device_connection(state: State<'_, ApiState>) -> CommandResult<PollStatus> {
     let mut auth = state.auth.lock().await;
     let pending = auth
@@ -442,4 +696,40 @@ pub async fn logout(state: State<'_, ApiState>) -> CommandResult<()> {
     delete_refresh_token()?;
     *state.auth.lock().await = AuthState::default();
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_external_calendar_url;
+
+    #[test]
+    fn accepts_only_expected_calendar_share_hosts() {
+        let google = normalize_external_calendar_url(
+            "google",
+            "https://calendar.google.com/calendar/ical/name%40example.com/private-token/basic.ics",
+        )
+        .unwrap();
+        assert!(google.starts_with("https://calendar.google.com/calendar/ical/"));
+
+        let apple = normalize_external_calendar_url(
+            "apple",
+            "webcal://p123-caldav.icloud.com/published/2/example-token",
+        )
+        .unwrap();
+        assert!(apple.starts_with("https://p123-caldav.icloud.com/published/2/"));
+
+        assert!(
+            normalize_external_calendar_url("google", "https://example.com/calendar.ics").is_err()
+        );
+        assert!(normalize_external_calendar_url(
+            "apple",
+            "https://icloud.com.example.net/published/2/token"
+        )
+        .is_err());
+        assert!(normalize_external_calendar_url(
+            "google",
+            "http://calendar.google.com/calendar/ical/test/basic.ics"
+        )
+        .is_err());
+    }
 }

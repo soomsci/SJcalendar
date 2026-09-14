@@ -1,4 +1,6 @@
-export type ExternalCalendarProviderId = 'google' | 'apple';
+import type { ExternalCalendarProvider as ExternalCalendarProviderId } from './types';
+
+export type { ExternalCalendarProviderId };
 
 export interface ExternalCalendarProvider {
   id: ExternalCalendarProviderId;
@@ -27,8 +29,8 @@ export const EXTERNAL_CALENDAR_PROVIDERS: ExternalCalendarProvider[] = [
     steps: [
       'PC에서 Google Calendar를 열고 설정으로 이동합니다.',
       '내 캘린더의 설정에서 사용할 캘린더를 선택한 뒤 캘린더 통합을 엽니다.',
-      '비밀 주소(iCal 형식)를 복사해 둡니다.',
-      '공유 링크 구독 기능이 제공되면 위젯의 입력란에 붙여 넣어 일정을 주기적으로 읽게 됩니다.',
+      '비밀 주소(iCal 형식)를 복사해 위젯 입력란에 붙여 넣습니다.',
+      '연동하기를 누르면 일정이 표시되고 새로고침할 때 공유 캘린더를 다시 읽습니다.',
     ],
     caution: '비밀 iCal 주소는 캘린더 열람 권한과 같습니다. 다른 사람에게 보내지 말고, 유출되면 Google Calendar에서 주소를 재설정해야 합니다. 조직 관리자가 이 기능을 제한할 수도 있습니다.',
     helpLabel: 'Google 공식 공유 링크 안내 열기',
@@ -47,8 +49,8 @@ export const EXTERNAL_CALENDAR_PROVIDERS: ExternalCalendarProvider[] = [
     steps: [
       'Apple Calendar에서 위젯에 표시할 별도 iCloud 캘린더를 만듭니다.',
       '캘린더 목록에서 정보 버튼을 누르고 공개 캘린더를 켭니다.',
-      '링크 공유로 주소를 복사해 둡니다.',
-      '공유 링크 구독 기능이 제공되면 위젯의 입력란에 붙여 넣어 일정을 주기적으로 읽게 됩니다.',
+      '링크 공유로 주소를 복사해 위젯 입력란에 붙여 넣습니다.',
+      '연동하기를 누르면 일정이 표시되고 새로고침할 때 공유 캘린더를 다시 읽습니다.',
     ],
     caution: 'Apple 공개 캘린더는 링크를 아는 누구나 볼 수 있습니다. 비밀번호·학생 개인정보 등 민감한 일정은 넣지 말고, 필요 없어지면 공개 공유를 꺼야 합니다.',
     helpLabel: 'Apple 공식 캘린더 공유 안내 열기',

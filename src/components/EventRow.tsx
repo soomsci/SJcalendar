@@ -1,6 +1,6 @@
 import type { CalendarEvent, EventKind } from '../calendar/types';
 
-const labels: Record<EventKind, string> = { academic: '학사', assessment: '평가', activity: '교육·행사', holiday: '휴업·방학', personal: '개인' };
+const labels: Record<EventKind, string> = { academic: '학사', assessment: '평가', activity: '교육·행사', holiday: '휴업·방학', personal: '개인', external: '외부' };
 
 export function EventRow({ event, onSelect }: { event: CalendarEvent; onSelect: (event: CalendarEvent) => void }) {
   const time = event.allDay ? '하루 종일' : `${event.startTime}${event.endTime ? `–${event.endTime}` : ''}`;

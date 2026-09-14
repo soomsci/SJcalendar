@@ -126,6 +126,7 @@ h2 { font-size: 15px; }
 .event--activity { border-color: #6c59ae; }
 .event--holiday { border-color: #2e9b79; }
 .event--personal { border-color: #b7487c; background: #fff5fa; }
+.event--external { border-color: #27828d; background: #f0fbfc; }
 
 .month-scroll, .week-scroll { width: 100%; height: 100%; overflow: auto; }
 .month-grid {
@@ -155,6 +156,7 @@ h2 { font-size: 15px; }
 .event-chip--activity { border-color: #6c59ae; background: #f2effb; }
 .event-chip--holiday { border-color: #2e9b79; background: #eaf8f3; }
 .event-chip--personal { border-color: #b7487c; background: #fff0f7; }
+.event-chip--external { border-color: #27828d; background: #eaf9fa; }
 
 .week-grid { min-width: 700px; height: 100%; display: grid; grid-template-columns: repeat(7, minmax(100px, 1fr)); padding: 0 12px 12px; }
 .week-column { min-width: 0; border-right: 1px solid #e0e6ee; background: #fff; }
@@ -207,12 +209,18 @@ footer button, .modal button { border: 1px solid #bdcad9; border-radius: 5px; pa
 .provider-guide__heading h3 { margin-bottom: 4px; font-size: 14px; }
 .provider-guide__heading p { color: #647386; font-size: 11px; line-height: 1.5; }
 .setup-badge { flex: 0 0 auto; padding: 4px 7px; border-radius: 999px; background: #fff0cb; color: #795600; font-size: 10px; font-weight: 700; }
+.setup-badge--connected { background: #dff4eb; color: #1e6b54; }
 .provider-guide h4 { margin: 13px 0 5px; color: #3f5064; font-size: 11px; }
 .provider-guide ul, .provider-guide ol { display: grid; gap: 4px; margin: 0; padding-left: 20px; color: #526275; font-size: 11px; line-height: 1.45; }
 .provider-caution { margin: 12px 0 8px !important; padding: 9px; border-radius: 7px; background: #fff3dd; color: #765316; font-size: 11px; line-height: 1.5; }
 .provider-caution strong { display: block; margin-bottom: 2px; }
 .official-help { padding: 7px 9px !important; border-color: #9bb5d1 !important; color: #285f9e; font-size: 11px; }
-.external-calendar-dialog > .form-actions { margin-top: 12px; }
+.subscription-form { display: grid; gap: 9px; margin-top: 14px; }
+.subscription-form label { display: grid; gap: 5px; color: #526275; font-size: 12px; font-weight: 700; }
+.subscription-form input { width: 100%; border: 1px solid #bdcad9; border-radius: 6px; padding: 9px; background: #fff; color: #19202a; font: inherit; font-weight: 400; }
+.subscription-form > p:not(.form-error) { margin: 0; color: #687789; font-size: 10px; line-height: 1.45; }
+.read-only-note { padding: 8px; border-radius: 6px; background: #eaf7f8; color: #21646b; font-size: 11px; line-height: 1.45; }
+.visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 
 .resize-handle { position: fixed; z-index: 60; }
 .resize-handle--n, .resize-handle--s { left: 10px; right: 10px; height: 6px; }
@@ -269,6 +277,7 @@ footer button, .modal button { border: 1px solid #bdcad9; border-radius: 5px; pa
   .event-chip--activity { background: #39324f; }
   .event-chip--holiday { background: #243f38; }
   .event--personal, .event-chip--personal { background: #472d3c; }
+  .event--external, .event-chip--external { background: #203e42; }
   .week-column { border-color: #35475a; }
   .week-column--today > header { background: #263f59; color: #b9d9ff; }
   footer { border-color: #334457; }
@@ -283,6 +292,11 @@ footer button, .modal button { border: 1px solid #bdcad9; border-radius: 5px; pa
   .provider-guide { border-color: #40546a; background: #1b2530; }
   .provider-guide h4, .provider-guide ul, .provider-guide ol { color: #b9c7d7; }
   .setup-badge { background: #4c3d16; color: #ffe4a3; }
+  .setup-badge--connected { background: #24483d; color: #b6ead8; }
   .provider-caution { background: #493a24; color: #f2d49a; }
   .official-help { color: #b9d9ff !important; }
+  .subscription-form label { color: #b9c7d7; }
+  .subscription-form input { border-color: #50647b; background: #18222c; color: #e5edf7; }
+  .subscription-form > p:not(.form-error) { color: #aebdce; }
+  .read-only-note { background: #203e42; color: #b8e5e9; }
 }

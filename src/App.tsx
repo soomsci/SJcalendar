@@ -20,6 +20,7 @@ import {
 } from './calendar/personalEvents';
 import type { PersonalEvent, PersonalEventInput } from './calendar/personalEvents';
 import type { CalendarEvent, CalendarView } from './calendar/types';
+import { parseExternalCalendarFeed } from './calendar/icalFeed';
 import {
   externalCalendarProvider,
   parseExternalCalendarProvider,
@@ -35,6 +36,8 @@ interface CommandError { code?: string; message?: string }
 interface DeviceConnection { userCode: string; verificationUrl: string; expiresIn: number; interval: number }
 interface PollStatus { status: 'pending' | 'connected'; retryAfter: number }
 interface CalendarResponse { schemaVersion: number; timezone: string; generatedAt: string; events: CalendarEvent[] }
+interface ExternalCalendarStatus { provider: string | null }
+interface ExternalCalendarFeed { provider: string; ical: string }
 type ConnectionState = 'checking' | 'disconnected' | 'connecting' | 'pending' | 'connected' | 'offline' | 'error';
 
 const VIEW_LABELS: Record<CalendarView, string> = { list: '목록', month: '월간', week: '주간' };
@@ -83,6 +86,10 @@ export default function App() {
   const [personalStorageError, setPersonalStorageError] = useState<string | null>(null);
   const [externalCalendarOpen, setExternalCalendarOpen] = useState(false);
   const [externalProvider, setExternalProvider] = useState<ExternalCalendarProviderId | null>(savedExternalProvider);
+  const [externalConnectedProvider, setExternalConnectedProvider] = useState<ExternalCalendarProviderId | null>(null);
+  const [externalEvents, setExternalEvents] = useState<CalendarEvent[]>([]);
+  const [externalBusy, setExternalBusy] = useState(false);
+  const [externalError, setExternalError] = useState<string | null>(null);
   const [updatedAt, setUpdatedAt] = useState('갱신 전');
   const [connectionState, setConnectionState] = useState<ConnectionState>('checking');
   const [connection, setConnection] = useState<DeviceConnection | null>(null);
@@ -93,15 +100,38 @@ export default function App() {
 
   const range = useMemo(() => viewRange(view, anchor), [anchor, view]);
   const events = useMemo<CalendarEvent[]>(
-    () => [...schoolEvents, ...personalEvents],
-    [personalEvents, schoolEvents],
+    () => [...schoolEvents, ...personalEvents, ...externalEvents],
+    [externalEvents, personalEvents, schoolEvents],
   );
   const visibleEvents = useMemo(() => eventsForRange(events, range), [events, range]);
   const next = useMemo(
     () => eventsForRange(events, { from: today, to: '9999-12-31' })[0],
     [events, today],
   );
-  const showCalendar = connectionState === 'connected' || connectionState === 'offline' || events.length > 0;
+  const showCalendar = connectionState === 'connected' || connectionState === 'offline' || externalConnectedProvider !== null || events.length > 0;
+
+  const applyExternalFeed = useCallback((feed: ExternalCalendarFeed, parsedEvents?: CalendarEvent[]) => {
+    const provider = parseExternalCalendarProvider(feed.provider);
+    if (!provider) throw new Error('지원하지 않는 외부 캘린더입니다.');
+    setExternalEvents(parsedEvents ?? parseExternalCalendarFeed(feed.ical, provider, range));
+    setExternalProvider(provider);
+    setExternalConnectedProvider(provider);
+    setExternalError(null);
+    setUpdatedAt(updatedLabel(new Date().toISOString()));
+    window.localStorage.setItem('external-calendar-provider', provider);
+  }, [range]);
+
+  const refreshExternal = useCallback(async () => {
+    setExternalBusy(true);
+    setExternalError(null);
+    try {
+      applyExternalFeed(await invoke<ExternalCalendarFeed>('fetch_external_calendar'));
+    } catch (error) {
+      setExternalError(errorMessage(error));
+    } finally {
+      setExternalBusy(false);
+    }
+  }, [applyExternalFeed]);
 
   const refresh = useCallback(async () => {
     if (requestInFlight.current) return;
@@ -217,11 +247,39 @@ export default function App() {
     window.localStorage.setItem('calendar-view', nextView);
   };
 
-  const saveExternalProvider = (provider: ExternalCalendarProviderId) => {
-    window.localStorage.setItem('external-calendar-provider', provider);
-    setExternalProvider(provider);
-    setExternalCalendarOpen(false);
-  };
+  const connectExternal = useCallback(async (provider: ExternalCalendarProviderId, url: string) => {
+    setExternalBusy(true);
+    setExternalError(null);
+    try {
+      const feed = await invoke<ExternalCalendarFeed>('connect_external_calendar', { provider, url });
+      const confirmedProvider = parseExternalCalendarProvider(feed.provider);
+      if (!confirmedProvider) throw new Error('지원하지 않는 외부 캘린더입니다.');
+      const parsedEvents = parseExternalCalendarFeed(feed.ical, confirmedProvider, range);
+      await invoke('save_external_calendar_connection', { provider, url });
+      applyExternalFeed(feed, parsedEvents);
+      setExternalCalendarOpen(false);
+    } catch (error) {
+      setExternalError(errorMessage(error));
+    } finally {
+      setExternalBusy(false);
+    }
+  }, [applyExternalFeed, range]);
+
+  const disconnectExternal = useCallback(async () => {
+    setExternalBusy(true);
+    setExternalError(null);
+    try {
+      await invoke('disconnect_external_calendar');
+      setExternalConnectedProvider(null);
+      setExternalEvents([]);
+      setSelected((current) => current?.source === 'external' ? null : current);
+      setExternalCalendarOpen(false);
+    } catch (error) {
+      setExternalError(errorMessage(error));
+    } finally {
+      setExternalBusy(false);
+    }
+  }, []);
 
   const startWindowDrag = (event: ReactMouseEvent<HTMLElement>) => {
     if (event.button !== 0 || (event.target as HTMLElement).closest('button')) return;
@@ -252,6 +310,22 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    let cancelled = false;
+    invoke<ExternalCalendarStatus>('external_calendar_status')
+      .then((status) => {
+        if (cancelled) return;
+        const provider = parseExternalCalendarProvider(status.provider);
+        if (provider) {
+          setExternalProvider(provider);
+          setExternalConnectedProvider(provider);
+          window.localStorage.setItem('external-calendar-provider', provider);
+        }
+      })
+      .catch((error) => { if (!cancelled) setExternalError(errorMessage(error)); });
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
     if (connectionState !== 'connected') return;
     void refresh();
   }, [range.from, range.to]);
@@ -262,6 +336,18 @@ export default function App() {
     const timer = window.setTimeout(() => { void refresh(); }, delay);
     return () => window.clearTimeout(timer);
   }, [connectionState, refresh]);
+
+  useEffect(() => {
+    if (!externalConnectedProvider) return;
+    void refreshExternal();
+  }, [externalConnectedProvider, refreshExternal]);
+
+  useEffect(() => {
+    if (!externalConnectedProvider) return;
+    const delay = 5 * 60 * 1000 + Math.floor(Math.random() * 30_000);
+    const timer = window.setTimeout(() => { void refreshExternal(); }, delay);
+    return () => window.clearTimeout(timer);
+  }, [externalConnectedProvider, refreshExternal]);
 
   useEffect(() => {
     if (connectionState !== 'pending' || !connection) return;
@@ -287,8 +373,15 @@ export default function App() {
     return () => { cancelled = true; window.clearTimeout(timer); };
   }, [connection, connectionState, refresh]);
 
+  const refreshAll = useCallback(async () => {
+    const tasks: Promise<void>[] = [];
+    if (connectionState === 'connected' || connectionState === 'offline') tasks.push(refresh());
+    if (externalConnectedProvider) tasks.push(refreshExternal());
+    await Promise.allSettled(tasks);
+  }, [connectionState, externalConnectedProvider, refresh, refreshExternal]);
+
   useEffect(() => {
-    const unlistenRefresh = listen('calendar://refresh', () => { void refresh(); });
+    const unlistenRefresh = listen('calendar://refresh', () => { void refreshAll(); });
     const unlistenLogout = listen('calendar://logout', () => { void logout(); });
     const unlistenSettings = listen('calendar://settings', () => setExternalCalendarOpen(true));
     return () => {
@@ -296,7 +389,7 @@ export default function App() {
       void unlistenLogout.then((unlisten) => unlisten());
       void unlistenSettings.then((unlisten) => unlisten());
     };
-  }, [logout, refresh]);
+  }, [logout, refreshAll]);
 
   return (
     <main className={collapsed ? 'widget widget--collapsed' : 'widget'}>
@@ -318,7 +411,7 @@ export default function App() {
                   <button
                     aria-selected={view === mode}
                     className={view === mode ? 'is-active' : ''}
-                    disabled={busy}
+                    disabled={busy || externalBusy}
                     key={mode}
                     onClick={() => changeView(mode)}
                     role="tab"
@@ -328,10 +421,10 @@ export default function App() {
               <button className="add-personal" onClick={() => openPersonalEditor()}>+ 개인 일정</button>
             </div>
             <div className="period-nav">
-              <button aria-label="이전 기간" disabled={busy} onClick={() => setAnchor((value) => shiftViewAnchor(view, value, -1))}>‹</button>
+              <button aria-label="이전 기간" disabled={busy || externalBusy} onClick={() => setAnchor((value) => shiftViewAnchor(view, value, -1))}>‹</button>
               <strong>{formatViewHeading(view, anchor)}</strong>
-              <button aria-label="다음 기간" disabled={busy} onClick={() => setAnchor((value) => shiftViewAnchor(view, value, 1))}>›</button>
-              <button className="today-button" disabled={busy} onClick={() => setAnchor(seoulToday())}>오늘</button>
+              <button aria-label="다음 기간" disabled={busy || externalBusy} onClick={() => setAnchor((value) => shiftViewAnchor(view, value, 1))}>›</button>
+              <button className="today-button" disabled={busy || externalBusy} onClick={() => setAnchor(seoulToday())}>오늘</button>
             </div>
           </section>}
 
@@ -345,7 +438,7 @@ export default function App() {
             <button className="secondary" onClick={() => openPersonalEditor()}>계정 없이 개인 일정 추가</button>
           </section>}
 
-          {personalEvents.length > 0 && schoolEvents.length === 0 && (connectionState === 'disconnected' || connectionState === 'connecting' || connectionState === 'pending' || connectionState === 'error') && <section className="school-connection-banner" aria-live="polite">
+          {events.length > 0 && schoolEvents.length === 0 && (connectionState === 'disconnected' || connectionState === 'connecting' || connectionState === 'pending' || connectionState === 'error') && <section className="school-connection-banner" aria-live="polite">
             <span>{message}{connection ? ` 연결 코드: ${connection.userCode}` : ''}</span>
             {connection
               ? <button disabled={busy} onClick={() => { setConnectionState('pending'); void invoke('open_connection_page', { url: connection.verificationUrl }); }}>승인 페이지 열기</button>
@@ -357,21 +450,24 @@ export default function App() {
           </section>}
 
           {personalStorageError && personalEditor === undefined && <p className="status status--error" role="alert">{personalStorageError}</p>}
+          {externalError && !externalCalendarOpen && <p className="status status--error" role="alert">외부 캘린더: {externalError}</p>}
           {connectionState === 'offline' && schoolEvents.length > 0 && <p className="status" role="status">{message} 마지막으로 받은 학교 일정을 표시합니다.</p>}
 
           <footer>
             <span>마지막 갱신: {updatedAt}</span>
             <button onClick={() => setExternalCalendarOpen(true)}>
-              {externalProvider ? `연동 준비: ${externalCalendarProvider(externalProvider).shortName}` : '캘린더 연동'}
+              {externalConnectedProvider ? `연동됨: ${externalCalendarProvider(externalConnectedProvider).shortName}` : '캘린더 연동'}
             </button>
-            <button disabled={busy} onClick={() => void refresh()}>새로고침</button>
+            <button disabled={busy || externalBusy} onClick={() => void refreshAll()}>{busy || externalBusy ? '갱신 중…' : '새로고침'}</button>
             <button onClick={() => void invoke('open_office_calendar')}>교무실 열기</button>
           </footer>
         </>}
 
-      {selected && <div className="modal" role="dialog" aria-modal="true" aria-label="일정 상세"><div><button className="close" onClick={() => setSelected(null)} aria-label="닫기">×</button><p className="eyebrow">{selected.source === 'personal' ? '개인 일정 · 이 PC에만 저장' : '학교 일정'}</p><h2>{selected.title}</h2><p>{formatKoreanDate(selected.date)}{selected.endDate ? ` ~ ${formatKoreanDate(selected.endDate)}` : ''}</p><p>{selected.allDay ? '하루 종일' : `${selected.startTime}${selected.endTime ? `–${selected.endTime}` : ''}`}</p>{selected.description && <p>{selected.description}</p>}{selected.source === 'personal' && personalStorageError && <p className="form-error" role="alert">{personalStorageError}</p>}{selected.source === 'personal'
+      {selected && <div className="modal" role="dialog" aria-modal="true" aria-label="일정 상세"><div><button className="close" onClick={() => setSelected(null)} aria-label="닫기">×</button><p className="eyebrow">{selected.source === 'personal' ? '개인 일정 · 이 PC에만 저장' : selected.source === 'external' ? `${externalCalendarProvider(selected.externalProvider ?? 'google').shortName} 공유 캘린더 · 읽기 전용` : '학교 일정'}</p><h2>{selected.title}</h2><p>{formatKoreanDate(selected.date)}{selected.endDate ? ` ~ ${formatKoreanDate(selected.endDate)}` : ''}</p><p>{selected.allDay ? '하루 종일' : `${selected.startTime}${selected.endTime ? `–${selected.endTime}` : ''}`}</p>{selected.description && <p>{selected.description}</p>}{selected.source === 'personal' && personalStorageError && <p className="form-error" role="alert">{personalStorageError}</p>}{selected.source === 'personal'
         ? <div className="modal-actions"><button onClick={() => openPersonalEditor(selected as PersonalEvent)}>수정</button><button className="danger" disabled={personalSaving} onClick={() => void deletePersonal(selected as PersonalEvent)}>삭제</button></div>
-        : <button onClick={() => void invoke('open_office_calendar')}>교무실에서 보기</button>}</div></div>}
+        : selected.source === 'external'
+          ? <p className="read-only-note">공유 캘린더 일정은 원본 캘린더에서 수정할 수 있습니다.</p>
+          : <button onClick={() => void invoke('open_office_calendar')}>교무실에서 보기</button>}</div></div>}
       {personalEditor !== undefined && <PersonalEventDialog
         key={personalEditor?.id ?? 'new-personal-event'}
         initial={personalEditor}
@@ -382,8 +478,12 @@ export default function App() {
       />}
       {externalCalendarOpen && <ExternalCalendarDialog
         initialProvider={externalProvider}
+        connectedProvider={externalConnectedProvider}
+        connecting={externalBusy}
+        connectionError={externalError}
         onCancel={() => setExternalCalendarOpen(false)}
-        onSave={saveExternalProvider}
+        onConnect={connectExternal}
+        onDisconnect={disconnectExternal}
       />}
       <WindowResizeHandles />
     </main>

@@ -1,6 +1,6 @@
 [package]
 name = "school-calendar-widget"
-version = "0.3.0"
+version = "0.3.1"
 description = "삼정중 학사일정 바탕화면 위젯"
 edition = "2021"
 

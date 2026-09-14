@@ -1,5 +1,6 @@
-export type EventKind = 'academic' | 'assessment' | 'activity' | 'holiday' | 'personal';
+export type EventKind = 'academic' | 'assessment' | 'activity' | 'holiday' | 'personal' | 'external';
 export type CalendarView = 'list' | 'month' | 'week';
+export type ExternalCalendarProvider = 'google' | 'apple';
 
 export interface DateRange {
   from: string;
@@ -16,5 +17,6 @@ export interface CalendarEvent {
   startTime: string | null;
   endTime: string | null;
   description?: string;
-  source?: 'school' | 'personal';
+  source?: 'school' | 'personal' | 'external';
+  externalProvider?: ExternalCalendarProvider;
 }

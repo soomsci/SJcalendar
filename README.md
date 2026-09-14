@@ -12,9 +12,10 @@ Windows 11 교직원용 학사일정 바탕화면 위젯이다. 온라인 교무
 보기 방식은 다음 실행에도 유지된다.
 
 `캘린더 연동`에서는 Google Calendar 또는 Apple Calendar를 연동 대상으로 선택하고 각 서비스의
-읽기 전용 iCalendar 공유 링크 준비 절차를 확인할 수 있다. 계정 암호나 OAuth 설정을 요구하지 않는다.
-현재 v0.3.0에는 실제 공유 링크 구독 커넥터가 포함되지 않으므로 선택 화면에는 `공유 링크 준비`
-상태를 표시한다.
+읽기 전용 iCalendar 공유 링크를 등록할 수 있다. 계정 암호나 OAuth 설정을 요구하지 않으며 링크는
+Windows 자격 증명 저장소에 보관한다. 연결된 일정은 목록·월간·주간 보기에 함께 표시되고 앱 시작,
+기간 이동, 수동 새로고침 및 약 5분 간격으로 다시 불러온다. 공유 일정은 위젯에서 수정할 수 없으며
+원본 Google 또는 Apple Calendar에서 수정해야 한다.
 
 ## 실행
 
@@ -23,7 +24,7 @@ Node.js와 npm을 설치한 뒤 `npm install`, `npm run dev`를 실행한다. Ta
 ## 검증
 
 `npm test`는 Seoul 날짜 계산, 여러 날 일정의 범위 겹침, 하루 종일 우선 정렬, 주·월 범위와 연도
-경계, 개인 일정 유효성·수정·삭제 및 학교 일정과의 저장 분리를 확인한다. Windows 실기기 확인 항목은
+경계, 개인 일정 유효성·수정·삭제, 학교 일정과의 저장 분리, iCalendar 시간대·반복 일정을 확인한다. Windows 실기기 확인 항목은
 [docs/WINDOWS_BEHAVIOR.md](docs/WINDOWS_BEHAVIOR.md)에 기록한다.
 
 서버 연동 계약은 [docs/API_CONTRACT.md](docs/API_CONTRACT.md)에 있다. 이 저장소는 DB 접속 정보나
