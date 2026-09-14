@@ -20,7 +20,13 @@ import {
 } from './calendar/personalEvents';
 import type { PersonalEvent, PersonalEventInput } from './calendar/personalEvents';
 import type { CalendarEvent, CalendarView } from './calendar/types';
+import {
+  externalCalendarProvider,
+  parseExternalCalendarProvider,
+  type ExternalCalendarProviderId,
+} from './calendar/externalCalendars';
 import { CalendarViews } from './components/CalendarViews';
+import { ExternalCalendarDialog } from './components/ExternalCalendarDialog';
 import { PersonalEventDialog } from './components/PersonalEventDialog';
 import { WindowResizeHandles } from './components/WindowResizeHandles';
 import './styles.css';
@@ -36,6 +42,10 @@ const VIEW_LABELS: Record<CalendarView, string> = { list: '목록', month: '월�
 function savedView(): CalendarView {
   const value = window.localStorage.getItem('calendar-view');
   return value === 'month' || value === 'week' ? value : 'list';
+}
+
+function savedExternalProvider(): ExternalCalendarProviderId | null {
+  return parseExternalCalendarProvider(window.localStorage.getItem('external-calendar-provider'));
 }
 
 function commandError(error: unknown): Required<CommandError> {
@@ -71,6 +81,8 @@ export default function App() {
   const [personalEditor, setPersonalEditor] = useState<PersonalEvent | null | undefined>(undefined);
   const [personalSaving, setPersonalSaving] = useState(false);
   const [personalStorageError, setPersonalStorageError] = useState<string | null>(null);
+  const [externalCalendarOpen, setExternalCalendarOpen] = useState(false);
+  const [externalProvider, setExternalProvider] = useState<ExternalCalendarProviderId | null>(savedExternalProvider);
   const [updatedAt, setUpdatedAt] = useState('갱신 전');
   const [connectionState, setConnectionState] = useState<ConnectionState>('checking');
   const [connection, setConnection] = useState<DeviceConnection | null>(null);
@@ -205,6 +217,12 @@ export default function App() {
     window.localStorage.setItem('calendar-view', nextView);
   };
 
+  const saveExternalProvider = (provider: ExternalCalendarProviderId) => {
+    window.localStorage.setItem('external-calendar-provider', provider);
+    setExternalProvider(provider);
+    setExternalCalendarOpen(false);
+  };
+
   const startWindowDrag = (event: ReactMouseEvent<HTMLElement>) => {
     if (event.button !== 0 || (event.target as HTMLElement).closest('button')) return;
     event.preventDefault();
@@ -272,7 +290,12 @@ export default function App() {
   useEffect(() => {
     const unlistenRefresh = listen('calendar://refresh', () => { void refresh(); });
     const unlistenLogout = listen('calendar://logout', () => { void logout(); });
-    return () => { void unlistenRefresh.then((unlisten) => unlisten()); void unlistenLogout.then((unlisten) => unlisten()); };
+    const unlistenSettings = listen('calendar://settings', () => setExternalCalendarOpen(true));
+    return () => {
+      void unlistenRefresh.then((unlisten) => unlisten());
+      void unlistenLogout.then((unlisten) => unlisten());
+      void unlistenSettings.then((unlisten) => unlisten());
+    };
   }, [logout, refresh]);
 
   return (
@@ -338,6 +361,9 @@ export default function App() {
 
           <footer>
             <span>마지막 갱신: {updatedAt}</span>
+            <button onClick={() => setExternalCalendarOpen(true)}>
+              {externalProvider ? `연동 준비: ${externalCalendarProvider(externalProvider).shortName}` : '캘린더 연동'}
+            </button>
             <button disabled={busy} onClick={() => void refresh()}>새로고침</button>
             <button onClick={() => void invoke('open_office_calendar')}>교무실 열기</button>
           </footer>
@@ -353,6 +379,11 @@ export default function App() {
         storageError={personalStorageError}
         onCancel={() => { if (!personalSaving) setPersonalEditor(undefined); }}
         onSave={savePersonal}
+      />}
+      {externalCalendarOpen && <ExternalCalendarDialog
+        initialProvider={externalProvider}
+        onCancel={() => setExternalCalendarOpen(false)}
+        onSave={saveExternalProvider}
       />}
       <WindowResizeHandles />
     </main>

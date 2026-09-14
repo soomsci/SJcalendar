@@ -13,6 +13,8 @@ const SERVER_ORIGIN: &str = "https://sjows.vercel.app";
 const CREDENTIAL_SERVICE: &str = "kr.hs.samsung.calendarwidget";
 const CREDENTIAL_ACCOUNT: &str = "sjows-refresh-token";
 const DEVICE_GRANT: &str = "urn:ietf:params:oauth:grant-type:device_code";
+const GOOGLE_CALENDAR_HELP: &str = "https://developers.google.com/workspace/calendar/api/auth";
+const APPLE_CALENDAR_HELP: &str = "https://support.apple.com/102654";
 
 #[derive(Default)]
 struct AuthState {
@@ -306,6 +308,23 @@ pub async fn open_connection_page(url: String) -> CommandResult<()> {
 pub async fn open_office_calendar() -> CommandResult<()> {
     open::that(format!("{SERVER_ORIGIN}/calendar"))
         .map_err(|_| CommandError::new("OPEN_BROWSER_FAILED", "교무실 페이지를 열지 못했습니다."))
+}
+
+#[tauri::command]
+pub async fn open_calendar_help(provider: String) -> CommandResult<()> {
+    let url = match provider.as_str() {
+        "google" => GOOGLE_CALENDAR_HELP,
+        "apple" => APPLE_CALENDAR_HELP,
+        _ => {
+            return Err(CommandError::new(
+                "INVALID_PROVIDER",
+                "지원하지 않는 캘린더입니다.",
+            ));
+        }
+    };
+    open::that(url).map_err(|_| {
+        CommandError::new("OPEN_BROWSER_FAILED", "공식 안내 페이지를 열지 못했습니다.")
+    })
 }
 
 #[tauri::command]

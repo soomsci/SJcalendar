@@ -15,6 +15,7 @@ pub fn run() {
             api::start_device_connection,
             api::open_connection_page,
             api::open_office_calendar,
+            api::open_calendar_help,
             api::poll_device_connection,
             api::fetch_calendar,
             api::logout,
