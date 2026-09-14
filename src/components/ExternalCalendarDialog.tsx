@@ -35,10 +35,10 @@ export function ExternalCalendarDialog({
       <div className="external-calendar-dialog">
         <button type="button" className="close" onClick={onCancel} aria-label="닫기">×</button>
         <p className="eyebrow">외부 캘린더</p>
-        <h2 id="external-calendar-title">연동할 캘린더 선택</h2>
+        <h2 id="external-calendar-title">공유 링크로 캘린더 연동</h2>
         <p className="external-calendar-intro">
-          현재 버전은 연동 대상을 저장하고 준비 방법을 안내합니다. 실제 일정 동기화는 각 서비스의
-          인증 설정과 커넥터가 추가된 뒤 사용할 수 있습니다.
+          복잡한 계정 인증 대신 읽기 전용 iCalendar 공유 링크를 사용합니다. 현재 버전은 연동 대상을
+          저장하고 링크를 만드는 방법을 안내하며, 실제 일정 가져오기는 공유 링크 구독 기능이 추가된 뒤 사용할 수 있습니다.
         </p>
 
         <div className="provider-options" role="radiogroup" aria-label="외부 캘린더 종류">
@@ -62,7 +62,7 @@ export function ExternalCalendarDialog({
         <section className="provider-guide" aria-live="polite">
           <div className="provider-guide__heading">
             <div><h3>{provider.name}</h3><p>{provider.summary}</p></div>
-            <span className="setup-badge">연동 준비 필요</span>
+            <span className="setup-badge">공유 링크 준비</span>
           </div>
 
           <h4>준비할 것</h4>

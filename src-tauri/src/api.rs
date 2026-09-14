@@ -13,8 +13,9 @@ const SERVER_ORIGIN: &str = "https://sjows.vercel.app";
 const CREDENTIAL_SERVICE: &str = "kr.hs.samsung.calendarwidget";
 const CREDENTIAL_ACCOUNT: &str = "sjows-refresh-token";
 const DEVICE_GRANT: &str = "urn:ietf:params:oauth:grant-type:device_code";
-const GOOGLE_CALENDAR_HELP: &str = "https://developers.google.com/workspace/calendar/api/auth";
-const APPLE_CALENDAR_HELP: &str = "https://support.apple.com/102654";
+const GOOGLE_CALENDAR_HELP: &str = "https://support.google.com/calendar/answer/37648";
+const APPLE_CALENDAR_HELP: &str =
+    "https://support.apple.com/guide/iphone/share-icloud-calendars-iph7613c4fb/ios";
 
 #[derive(Default)]
 struct AuthState {

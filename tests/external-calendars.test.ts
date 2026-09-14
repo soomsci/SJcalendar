@@ -8,8 +8,9 @@ import {
 
 test('offers Google and Apple calendar setup choices', () => {
   assert.deepEqual(EXTERNAL_CALENDAR_PROVIDERS.map(({ id }) => id), ['google', 'apple']);
-  assert.equal(externalCalendarProvider('google').method, 'OAuth 2.0 · 읽기 전용');
-  assert.match(externalCalendarProvider('apple').caution, /기본 암호를 위젯에 입력하면 안 됩니다/);
+  assert.equal(externalCalendarProvider('google').method, 'iCalendar 공유 링크 · 읽기 전용');
+  assert.match(externalCalendarProvider('google').caution, /캘린더 열람 권한과 같습니다/);
+  assert.match(externalCalendarProvider('apple').caution, /링크를 아는 누구나 볼 수 있습니다/);
 });
 
 test('accepts only supported stored calendar providers', () => {
