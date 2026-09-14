@@ -1,237 +1,360 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { eventsForSevenDays, formatKoreanDate, seoulToday } from './calendar/events';
-import type { CalendarEvent } from './calendar/types';
-import { EventRow } from './components/EventRow';
-import { createMockEvents } from './fixtures/events';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { MouseEvent as ReactMouseEvent } from 'react';
+import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import {
-  hideWindow,
-  isDesktopApp,
-  readDesktopSettings,
-  setAlwaysOnTop,
-  setAutostart,
-  setCollapsedWindow,
-  subscribeToDesktopEvents,
-} from './platform/desktop';
+  eventsForRange,
+  formatKoreanDate,
+  formatViewHeading,
+  seoulToday,
+  shiftViewAnchor,
+  viewRange,
+} from './calendar/events';
+import {
+  createPersonalEvent,
+  loadPersonalEvents,
+  removePersonalEvent,
+  savePersonalEvents,
+  upsertPersonalEvent,
+} from './calendar/personalEvents';
+import type { PersonalEvent, PersonalEventInput } from './calendar/personalEvents';
+import type { CalendarEvent, CalendarView } from './calendar/types';
+import { CalendarViews } from './components/CalendarViews';
+import { PersonalEventDialog } from './components/PersonalEventDialog';
+import { WindowResizeHandles } from './components/WindowResizeHandles';
 import './styles.css';
 
-function formatUpdatedAt(date: Date): string {
-  return new Intl.DateTimeFormat('ko-KR', {
-    timeZone: 'Asia/Seoul',
-    hour: '2-digit',
-    minute: '2-digit',
-  }).format(date);
+interface CommandError { code?: string; message?: string }
+interface DeviceConnection { userCode: string; verificationUrl: string; expiresIn: number; interval: number }
+interface PollStatus { status: 'pending' | 'connected'; retryAfter: number }
+interface CalendarResponse { schemaVersion: number; timezone: string; generatedAt: string; events: CalendarEvent[] }
+type ConnectionState = 'checking' | 'disconnected' | 'connecting' | 'pending' | 'connected' | 'offline' | 'error';
+
+const VIEW_LABELS: Record<CalendarView, string> = { list: '목록', month: '월간', week: '주간' };
+
+function savedView(): CalendarView {
+  const value = window.localStorage.getItem('calendar-view');
+  return value === 'month' || value === 'week' ? value : 'list';
+}
+
+function commandError(error: unknown): Required<CommandError> {
+  if (error && typeof error === 'object') {
+    const value = error as CommandError;
+    return { code: value.code ?? 'UNKNOWN', message: value.message ?? '요청을 처리하지 못했습니다.' };
+  }
+  return { code: 'UNKNOWN', message: typeof error === 'string' ? error : '요청을 처리하지 못했습니다.' };
+}
+
+function errorMessage(error: unknown): string {
+  const parsed = commandError(error);
+  return parsed.code === 'UNKNOWN' ? parsed.message : `${parsed.message} (${parsed.code})`;
+}
+
+function nextPaint(): Promise<void> {
+  return new Promise((resolve) => window.requestAnimationFrame(() => resolve()));
+}
+
+function updatedLabel(value: string): string {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? '방금 전' : date.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' });
 }
 
 export default function App() {
-  const [today, setToday] = useState(() => seoulToday());
   const [collapsed, setCollapsed] = useState(false);
   const [selected, setSelected] = useState<CalendarEvent | null>(null);
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  const [updatedAt, setUpdatedAt] = useState(() => new Date());
-  const [notice, setNotice] = useState('모의 일정으로 화면 동작을 확인하고 있습니다.');
-  const [autostart, setAutostartState] = useState(false);
-  const [alwaysOnTop, setAlwaysOnTopState] = useState(false);
-  const [settingBusy, setSettingBusy] = useState(false);
+  const [today, setToday] = useState(() => seoulToday());
+  const [anchor, setAnchor] = useState(() => seoulToday());
+  const [view, setView] = useState<CalendarView>(savedView);
+  const [schoolEvents, setSchoolEvents] = useState<CalendarEvent[]>([]);
+  const [personalEvents, setPersonalEvents] = useState<PersonalEvent[]>([]);
+  const [personalEditor, setPersonalEditor] = useState<PersonalEvent | null | undefined>(undefined);
+  const [personalSaving, setPersonalSaving] = useState(false);
+  const [personalStorageError, setPersonalStorageError] = useState<string | null>(null);
+  const [updatedAt, setUpdatedAt] = useState('갱신 전');
+  const [connectionState, setConnectionState] = useState<ConnectionState>('checking');
+  const [connection, setConnection] = useState<DeviceConnection | null>(null);
+  const [message, setMessage] = useState('저장된 로그인을 확인하고 있습니다.');
+  const [busy, setBusy] = useState(false);
+  const initialized = useRef(false);
+  const requestInFlight = useRef(false);
 
-  const events = useMemo(() => eventsForSevenDays(createMockEvents(today), today), [today]);
-  const todayEvents = useMemo(
-    () => events.filter((event) => event.date <= today && (event.endDate ?? event.date) >= today),
+  const range = useMemo(() => viewRange(view, anchor), [anchor, view]);
+  const events = useMemo<CalendarEvent[]>(
+    () => [...schoolEvents, ...personalEvents],
+    [personalEvents, schoolEvents],
+  );
+  const visibleEvents = useMemo(() => eventsForRange(events, range), [events, range]);
+  const next = useMemo(
+    () => eventsForRange(events, { from: today, to: '9999-12-31' })[0],
     [events, today],
   );
-  const upcomingByDate = useMemo(
-    () => events.filter((event) => event.date > today).reduce<Record<string, CalendarEvent[]>>((groups, event) => {
-      (groups[event.date] ??= []).push(event);
-      return groups;
-    }, {}),
-    [events, today],
-  );
-  const nextEvent = events[0];
+  const showCalendar = connectionState === 'connected' || connectionState === 'offline' || events.length > 0;
 
-  const refresh = useCallback(() => {
-    setToday(seoulToday());
-    setUpdatedAt(new Date());
-    setNotice('모의 일정을 새로 불러왔습니다.');
+  const refresh = useCallback(async () => {
+    if (requestInFlight.current) return;
+    requestInFlight.current = true;
+    setBusy(true);
+    const currentToday = seoulToday();
+    setToday(currentToday);
+    try {
+      const response = await invoke<CalendarResponse>('fetch_calendar', { from: range.from, to: range.to });
+      if (response.schemaVersion !== 1 || response.timezone !== 'Asia/Seoul') {
+        throw { code: 'INVALID_RESPONSE', message: '지원하지 않는 일정 형식입니다.' };
+      }
+      setSchoolEvents(response.events.map((event) => ({ ...event, source: 'school' as const })));
+      setUpdatedAt(updatedLabel(response.generatedAt));
+      setConnectionState('connected');
+      setMessage('온라인 교무실과 연결되었습니다.');
+    } catch (rawError) {
+      const error = commandError(rawError);
+      if (error.code === 'AUTH_REQUIRED' || error.code === 'STAFF_REQUIRED') {
+        setSchoolEvents([]);
+        setConnectionState('disconnected');
+      } else if (error.code === 'NETWORK_ERROR') {
+        setConnectionState(schoolEvents.length ? 'offline' : 'error');
+      } else {
+        setConnectionState('error');
+      }
+      setMessage(errorMessage(rawError));
+    } finally {
+      requestInFlight.current = false;
+      setBusy(false);
+    }
+  }, [range, schoolEvents.length]);
+
+  const startConnection = useCallback(async () => {
+    if (requestInFlight.current) return;
+    requestInFlight.current = true;
+    setBusy(true);
+    setConnection(null);
+    setConnectionState('connecting');
+    setMessage('서버에 연결 코드를 요청하고 있습니다. 최대 15초 정도 걸릴 수 있습니다.');
+    try {
+      await nextPaint();
+      const started = await invoke<DeviceConnection>('start_device_connection');
+      setConnection(started);
+      setConnectionState('pending');
+      setMessage('브라우저에서 기기 연결을 승인해 주세요.');
+      try {
+        await invoke('open_connection_page', { url: started.verificationUrl });
+      } catch (openError) {
+        setConnectionState('error');
+        setMessage(`${errorMessage(openError)} 아래 버튼으로 승인 페이지를 다시 열어 주세요.`);
+      }
+    } catch (rawError) {
+      setConnectionState('error');
+      setMessage(errorMessage(rawError));
+    } finally {
+      requestInFlight.current = false;
+      setBusy(false);
+    }
   }, []);
 
-  const openSettings = useCallback(() => {
-    setSettingsOpen(true);
-    if (collapsed) {
-      setCollapsed(false);
-      void setCollapsedWindow(false).catch(() => setNotice('설정 창 크기를 복원하지 못했습니다.'));
+  const logout = useCallback(async () => {
+    try { await invoke('logout'); } catch { /* Clear local UI even when remote revocation is unavailable. */ }
+    setSchoolEvents([]);
+    setConnection(null);
+    setSelected(null);
+    setUpdatedAt('갱신 전');
+    setConnectionState('disconnected');
+    setMessage('로그아웃했습니다. 다시 연결하면 일정을 확인할 수 있습니다.');
+  }, []);
+
+  const openPersonalEditor = useCallback((event?: PersonalEvent) => {
+    setSelected(null);
+    setPersonalStorageError(null);
+    setPersonalEditor(event ?? null);
+  }, []);
+
+  const savePersonal = useCallback(async (input: PersonalEventInput) => {
+    setPersonalSaving(true);
+    setPersonalStorageError(null);
+    try {
+      const personal = createPersonalEvent(input, personalEditor?.id);
+      const nextEvents = upsertPersonalEvent(personalEvents, personal);
+      await savePersonalEvents(nextEvents);
+      setPersonalEvents(nextEvents);
+      setPersonalEditor(undefined);
+      setSelected(personal);
+    } catch (error) {
+      setPersonalStorageError(error instanceof Error ? error.message : '개인 일정을 저장하지 못했습니다.');
+    } finally {
+      setPersonalSaving(false);
     }
-  }, [collapsed]);
+  }, [personalEditor, personalEvents]);
+
+  const deletePersonal = useCallback(async (personal: PersonalEvent) => {
+    if (!window.confirm(`\"${personal.title}\" 개인 일정을 삭제할까요?`)) return;
+    setPersonalSaving(true);
+    setPersonalStorageError(null);
+    try {
+      const nextEvents = removePersonalEvent(personalEvents, personal.id);
+      await savePersonalEvents(nextEvents);
+      setPersonalEvents(nextEvents);
+      setSelected(null);
+    } catch (error) {
+      setPersonalStorageError(error instanceof Error ? error.message : '개인 일정을 삭제하지 못했습니다.');
+    } finally {
+      setPersonalSaving(false);
+    }
+  }, [personalEvents]);
+
+  const changeView = (nextView: CalendarView) => {
+    setView(nextView);
+    window.localStorage.setItem('calendar-view', nextView);
+  };
+
+  const startWindowDrag = (event: ReactMouseEvent<HTMLElement>) => {
+    if (event.button !== 0 || (event.target as HTMLElement).closest('button')) return;
+    event.preventDefault();
+    void getCurrentWindow().startDragging();
+  };
 
   useEffect(() => {
-    const dateTimer = window.setInterval(() => setToday(seoulToday()), 60_000);
-    const refreshTimer = window.setInterval(refresh, 5 * 60_000);
-    return () => {
-      window.clearInterval(dateTimer);
-      window.clearInterval(refreshTimer);
-    };
+    if (initialized.current) return;
+    initialized.current = true;
+    invoke<boolean>('has_saved_login')
+      .then((saved) => {
+        if (saved) return refresh();
+        setConnectionState('disconnected');
+        setMessage('학교 계정을 연결하면 최신 학사일정을 확인할 수 있습니다.');
+      })
+      .catch((error) => { setConnectionState('error'); setMessage(errorMessage(error)); });
   }, [refresh]);
 
   useEffect(() => {
-    if (!selected && !settingsOpen) return;
-    const closeDialog = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') return;
-      if (settingsOpen) setSettingsOpen(false);
-      else setSelected(null);
-    };
-    window.addEventListener('keydown', closeDialog);
-    return () => window.removeEventListener('keydown', closeDialog);
-  }, [selected, settingsOpen]);
-
-  useEffect(() => {
-    if (!isDesktopApp) return;
-    readDesktopSettings()
-      .then(({ autostart: enabled, alwaysOnTop: top }) => {
-        setAutostartState(enabled);
-        setAlwaysOnTopState(top);
-      })
-      .catch(() => setNotice('Windows 설정 상태를 읽지 못했습니다.'));
+    let cancelled = false;
+    loadPersonalEvents()
+      .then((stored) => { if (!cancelled) setPersonalEvents(stored); })
+      .catch(() => {
+        if (!cancelled) setPersonalStorageError('이 PC에 저장된 개인 일정을 불러오지 못했습니다.');
+      });
+    return () => { cancelled = true; };
   }, []);
 
-  async function updateAutostart(enabled: boolean) {
-    setSettingBusy(true);
-    try {
-      await setAutostart(enabled);
-      setAutostartState(enabled);
-      setNotice(enabled ? 'Windows 로그인 시 자동 실행을 켰습니다.' : '자동 실행을 껐습니다.');
-    } catch {
-      setNotice('자동 실행 설정을 변경하지 못했습니다.');
-    } finally {
-      setSettingBusy(false);
-    }
-  }
-
-  async function updateAlwaysOnTop(enabled: boolean) {
-    setSettingBusy(true);
-    try {
-      await setAlwaysOnTop(enabled);
-      setAlwaysOnTopState(enabled);
-      setNotice(enabled ? '위젯을 다른 창 위에 표시합니다.' : '항상 위 표시를 껐습니다.');
-    } catch {
-      setNotice('항상 위 설정을 변경하지 못했습니다.');
-    } finally {
-      setSettingBusy(false);
-    }
-  }
+  useEffect(() => {
+    if (connectionState !== 'connected') return;
+    void refresh();
+  }, [range.from, range.to]);
 
   useEffect(() => {
-    let active = true;
-    let unsubscribe: () => void = () => undefined;
-    subscribeToDesktopEvents({
-      refresh,
-      openSettings,
-      logout: () => setNotice('로그인은 서버 연동 단계에서 제공됩니다.'),
-      alwaysOnTopChanged: setAlwaysOnTopState,
-      toggleAutostart: () => {
-        void readDesktopSettings()
-          .then(({ autostart: enabled }) => updateAutostart(!enabled))
-          .catch(() => setNotice('자동 실행 설정을 읽지 못했습니다.'));
-      },
-    })
-      .then((dispose) => {
-        if (active) unsubscribe = dispose;
-        else dispose();
-      })
-      .catch(() => setNotice('트레이 메뉴 연결을 초기화하지 못했습니다.'));
-    return () => {
-      active = false;
-      unsubscribe();
-    };
-  }, [openSettings, refresh]);
+    if (connectionState !== 'connected') return;
+    const delay = 5 * 60 * 1000 + Math.floor(Math.random() * 30_000);
+    const timer = window.setTimeout(() => { void refresh(); }, delay);
+    return () => window.clearTimeout(timer);
+  }, [connectionState, refresh]);
 
-  async function toggleCollapsed() {
-    const next = !collapsed;
-    setCollapsed(next);
-    try {
-      await setCollapsedWindow(next);
-    } catch {
-      setNotice('창 크기를 변경하지 못했습니다.');
-    }
-  }
+  useEffect(() => {
+    if (connectionState !== 'pending' || !connection) return;
+    let cancelled = false;
+    const timer = window.setTimeout(async () => {
+      try {
+        const result = await invoke<PollStatus>('poll_device_connection');
+        if (cancelled) return;
+        if (result.status === 'connected') {
+          setConnection(null);
+          setMessage('연결되었습니다. 일정을 불러옵니다.');
+          await refresh();
+        } else {
+          setConnection((current) => current ? { ...current, interval: result.retryAfter } : current);
+        }
+      } catch (error) {
+        if (cancelled) return;
+        setConnection(null);
+        setConnectionState('error');
+        setMessage(errorMessage(error));
+      }
+    }, connection.interval * 1000);
+    return () => { cancelled = true; window.clearTimeout(timer); };
+  }, [connection, connectionState, refresh]);
+
+  useEffect(() => {
+    const unlistenRefresh = listen('calendar://refresh', () => { void refresh(); });
+    const unlistenLogout = listen('calendar://logout', () => { void logout(); });
+    return () => { void unlistenRefresh.then((unlisten) => unlisten()); void unlistenLogout.then((unlisten) => unlisten()); };
+  }, [logout, refresh]);
 
   return (
     <main className={collapsed ? 'widget widget--collapsed' : 'widget'}>
-      <header data-tauri-drag-region className="header">
-        <div data-tauri-drag-region>
+      <header className="header" onMouseDown={startWindowDrag}>
+        <div>
           <p className="eyebrow">삼정중학교</p>
           <h1>{formatKoreanDate(today)}</h1>
         </div>
-        <div className="window-actions">
-          {!collapsed && <button className="icon" type="button" onClick={openSettings} aria-label="설정">⚙</button>}
-          {isDesktopApp && !collapsed && <button className="icon" type="button" onClick={() => void hideWindow()} aria-label="트레이로 숨기기">×</button>}
-          <button className="icon collapse-button" type="button" onClick={() => void toggleCollapsed()} aria-label={collapsed ? '펼치기' : '접기'}>{collapsed ? '⌄' : '−'}</button>
-        </div>
+        <button className="icon" onClick={() => setCollapsed(!collapsed)} aria-label={collapsed ? '펼치기' : '접기'}>{collapsed ? '⌄' : '−'}</button>
       </header>
 
-      {collapsed ? (
-        <section className="collapsed-next" aria-live="polite">
-          <span>다음 일정</span>
-          <strong>{nextEvent?.title ?? '등록된 일정이 없습니다'}</strong>
-        </section>
-      ) : (
-        <>
-          <div className="source-banner"><span className="source-dot" />모의 데이터 · 서버 연동 전</div>
-          <div className="content">
-            <section className="today" aria-labelledby="today-heading">
-              <div className="section-heading"><h2 id="today-heading">오늘</h2><span>{todayEvents.length}개</span></div>
-              {todayEvents.length
-                ? todayEvents.map((event) => <EventRow key={event.id} event={event} onSelect={setSelected} />)
-                : <p className="empty">오늘 등록된 일정이 없습니다</p>}
-            </section>
-            <section className="upcoming" aria-labelledby="upcoming-heading">
-              <div className="section-heading"><h2 id="upcoming-heading">향후 7일</h2><span>서울 기준</span></div>
-              {Object.keys(upcomingByDate).length ? Object.entries(upcomingByDate).map(([date, items]) => (
-                <div className="day" key={date}>
-                  <h3>{formatKoreanDate(date)}</h3>
-                  {items.map((event) => <EventRow key={event.id} event={event} onSelect={setSelected} />)}
-                </div>
-              )) : <p className="empty">다가오는 일정이 없습니다</p>}
-            </section>
-          </div>
-          <p className="notice" aria-live="polite">{notice}</p>
+      {collapsed
+        ? <section className="collapsed-next"><span>다음 일정</span><strong>{next?.title ?? '등록된 일정이 없습니다'}</strong></section>
+        : <>
+          {showCalendar && <section className="calendar-toolbar" aria-label="일정 보기 설정">
+            <div className="toolbar-top">
+              <div className="view-tabs" role="tablist" aria-label="보기 방식">
+                {(Object.keys(VIEW_LABELS) as CalendarView[]).map((mode) => (
+                  <button
+                    aria-selected={view === mode}
+                    className={view === mode ? 'is-active' : ''}
+                    disabled={busy}
+                    key={mode}
+                    onClick={() => changeView(mode)}
+                    role="tab"
+                  >{VIEW_LABELS[mode]}</button>
+                ))}
+              </div>
+              <button className="add-personal" onClick={() => openPersonalEditor()}>+ 개인 일정</button>
+            </div>
+            <div className="period-nav">
+              <button aria-label="이전 기간" disabled={busy} onClick={() => setAnchor((value) => shiftViewAnchor(view, value, -1))}>‹</button>
+              <strong>{formatViewHeading(view, anchor)}</strong>
+              <button aria-label="다음 기간" disabled={busy} onClick={() => setAnchor((value) => shiftViewAnchor(view, value, 1))}>›</button>
+              <button className="today-button" disabled={busy} onClick={() => setAnchor(seoulToday())}>오늘</button>
+            </div>
+          </section>}
+
+          {(connectionState === 'disconnected' || connectionState === 'connecting' || connectionState === 'pending' || connectionState === 'error') && events.length === 0 && <section className="connection" aria-live="polite">
+            <h2>{connectionState === 'pending' ? '브라우저에서 연결 승인' : '학교 계정 연결'}</h2>
+            <p>{message}</p>
+            {connection && <strong className="connection__code">{connection.userCode}</strong>}
+            {connection
+              ? <button disabled={busy} onClick={() => { setConnectionState('pending'); void invoke('open_connection_page', { url: connection.verificationUrl }); }}>승인 페이지 다시 열기</button>
+              : <button disabled={busy} onClick={() => void startConnection()}>{busy ? '연결 중…' : '학교 계정으로 연결'}</button>}
+            <button className="secondary" onClick={() => openPersonalEditor()}>계정 없이 개인 일정 추가</button>
+          </section>}
+
+          {personalEvents.length > 0 && schoolEvents.length === 0 && (connectionState === 'disconnected' || connectionState === 'connecting' || connectionState === 'pending' || connectionState === 'error') && <section className="school-connection-banner" aria-live="polite">
+            <span>{message}{connection ? ` 연결 코드: ${connection.userCode}` : ''}</span>
+            {connection
+              ? <button disabled={busy} onClick={() => { setConnectionState('pending'); void invoke('open_connection_page', { url: connection.verificationUrl }); }}>승인 페이지 열기</button>
+              : <button disabled={busy} onClick={() => void startConnection()}>{busy ? '연결 중…' : '학교 일정 연결'}</button>}
+          </section>}
+
+          {showCalendar && <section className="calendar-content">
+            <CalendarViews view={view} anchor={anchor} today={today} events={visibleEvents} onSelect={setSelected} />
+          </section>}
+
+          {personalStorageError && personalEditor === undefined && <p className="status status--error" role="alert">{personalStorageError}</p>}
+          {connectionState === 'offline' && schoolEvents.length > 0 && <p className="status" role="status">{message} 마지막으로 받은 학교 일정을 표시합니다.</p>}
+
           <footer>
-            <span>마지막 갱신 {formatUpdatedAt(updatedAt)}</span>
-            <button type="button" onClick={refresh}>새로고침</button>
-            <button type="button" disabled title="교무실 연동 주소가 아직 설정되지 않았습니다">교무실 열기</button>
+            <span>마지막 갱신: {updatedAt}</span>
+            <button disabled={busy} onClick={() => void refresh()}>새로고침</button>
+            <button onClick={() => void invoke('open_office_calendar')}>교무실 열기</button>
           </footer>
-        </>
-      )}
+        </>}
 
-      {selected && (
-        <div className="modal" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && setSelected(null)}>
-          <div role="dialog" aria-modal="true" aria-labelledby="event-dialog-title">
-            <button className="close" type="button" onClick={() => setSelected(null)} aria-label="닫기">×</button>
-            <p className="eyebrow">일정 상세</p>
-            <h2 id="event-dialog-title">{selected.title}</h2>
-            <p>{formatKoreanDate(selected.date)}{selected.endDate && selected.endDate !== selected.date ? ` ~ ${formatKoreanDate(selected.endDate)}` : ''}</p>
-            <p>{selected.allDay ? '하루 종일' : `${selected.startTime}${selected.endTime ? `–${selected.endTime}` : ''}`}</p>
-            {selected.description && <p className="description">{selected.description}</p>}
-            <button type="button" disabled title="교무실 연동 주소가 아직 설정되지 않았습니다">교무실에서 보기</button>
-          </div>
-        </div>
-      )}
-
-      {settingsOpen && (
-        <div className="modal" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && setSettingsOpen(false)}>
-          <div role="dialog" aria-modal="true" aria-labelledby="settings-dialog-title">
-            <button className="close" type="button" onClick={() => setSettingsOpen(false)} aria-label="닫기">×</button>
-            <p className="eyebrow">Windows 위젯</p>
-            <h2 id="settings-dialog-title">설정</h2>
-            <label className="setting-row">
-              <span><strong>로그인 시 자동 실행</strong><small>선택한 경우에만 등록합니다.</small></span>
-              <input type="checkbox" checked={autostart} disabled={!isDesktopApp || settingBusy} onChange={(event) => void updateAutostart(event.target.checked)} />
-            </label>
-            <label className="setting-row">
-              <span><strong>항상 위</strong><small>다른 일반 창 위에 표시합니다.</small></span>
-              <input type="checkbox" checked={alwaysOnTop} disabled={!isDesktopApp || settingBusy} onChange={(event) => void updateAlwaysOnTop(event.target.checked)} />
-            </label>
-            {!isDesktopApp && <p className="settings-note">자동 실행과 항상 위 설정은 Windows 앱에서 사용할 수 있습니다.</p>}
-          </div>
-        </div>
-      )}
+      {selected && <div className="modal" role="dialog" aria-modal="true" aria-label="일정 상세"><div><button className="close" onClick={() => setSelected(null)} aria-label="닫기">×</button><p className="eyebrow">{selected.source === 'personal' ? '개인 일정 · 이 PC에만 저장' : '학교 일정'}</p><h2>{selected.title}</h2><p>{formatKoreanDate(selected.date)}{selected.endDate ? ` ~ ${formatKoreanDate(selected.endDate)}` : ''}</p><p>{selected.allDay ? '하루 종일' : `${selected.startTime}${selected.endTime ? `–${selected.endTime}` : ''}`}</p>{selected.description && <p>{selected.description}</p>}{selected.source === 'personal' && personalStorageError && <p className="form-error" role="alert">{personalStorageError}</p>}{selected.source === 'personal'
+        ? <div className="modal-actions"><button onClick={() => openPersonalEditor(selected as PersonalEvent)}>수정</button><button className="danger" disabled={personalSaving} onClick={() => void deletePersonal(selected as PersonalEvent)}>삭제</button></div>
+        : <button onClick={() => void invoke('open_office_calendar')}>교무실에서 보기</button>}</div></div>}
+      {personalEditor !== undefined && <PersonalEventDialog
+        key={personalEditor?.id ?? 'new-personal-event'}
+        initial={personalEditor}
+        saving={personalSaving}
+        storageError={personalStorageError}
+        onCancel={() => { if (!personalSaving) setPersonalEditor(undefined); }}
+        onSave={savePersonal}
+      />}
+      <WindowResizeHandles />
     </main>
   );
 }

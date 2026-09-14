@@ -1,15 +1,28 @@
 # 삼정 학사일정 위젯
 
-Windows 11 교직원용 학사일정 바탕화면 위젯의 초기 시제품이다. 현재 서울 기준 오늘과 향후 7일의 모의 일정, 일정 상세, 접기, 새로고침, 밝은 화면·어두운 화면을 제공한다. Tauri 앱에서는 트레이 표시·숨기기, 항상 위, 사용자가 선택하는 자동 실행, 단일 실행, 창 위치·크기 복원을 연결했다.
+Windows 11 교직원용 학사일정 바탕화면 위젯이다. 온라인 교무실(`https://sjows.vercel.app`)과
+일회용 기기 코드로 연결해 목록·월간·주간 일정, 일정 상세, 접기, 새로고침 화면을 제공한다.
+공용 API 키나 DB 연결 정보는 앱에 넣지 않으며 갱신 토큰은 Windows 자격 증명 저장소에 보관한다.
 
-서버 API, 기기 연결, 인증 저장소, 운영 DB 연결은 아직 구현하지 않았다. 화면에는 모의 데이터임을 표시하고 교무실 열기 버튼도 비활성화해 미구현 연동을 실제 기능처럼 보이지 않게 한다.
+**+ 개인 일정**으로 추가한 일정은 학교 API로 보내지 않고 현재 Windows 사용자의 앱 데이터 폴더에만
+저장한다. 학교 일정과 개인 일정은 화면에서만 합쳐 보여 주며, 로그아웃해도 개인 일정은 유지된다.
+로컬 파일은 암호화 저장소가 아니므로 비밀번호나 민감한 개인정보는 메모에 입력하지 않는다.
+
+창 상단을 끌어 위치를 옮길 수 있고, 네 모서리와 가장자리를 끌어 크기를 조절할 수 있다. 선택한
+보기 방식은 다음 실행에도 유지된다.
 
 ## 실행
 
-Node.js와 npm을 설치한 뒤 `npm install`, `npm run dev`를 실행한다. Tauri 개발 실행은 Rust 1.77.2 이상과 Windows용 Tauri 선행 조건을 설치한 뒤 `npm run tauri dev`를 사용한다.
+Node.js와 npm을 설치한 뒤 `npm install`, `npm run dev`를 실행한다. Tauri 개발·Windows 설치 파일 빌드에는 별도의 Rust 도구 체인과 Windows 환경이 필요하다.
 
 ## 검증
 
-`npm test`는 서울 날짜 계산, 여러 날 일정의 범위 겹침, 하루 종일 우선 정렬과 연도 경계를 확인한다. `npm run build`는 TypeScript와 웹 번들을 함께 검증한다. Windows 실기기 확인 항목은 [docs/WINDOWS_BEHAVIOR.md](docs/WINDOWS_BEHAVIOR.md)에 기록한다.
+`npm test`는 Seoul 날짜 계산, 여러 날 일정의 범위 겹침, 하루 종일 우선 정렬, 주·월 범위와 연도
+경계, 개인 일정 유효성·수정·삭제 및 학교 일정과의 저장 분리를 확인한다. Windows 실기기 확인 항목은
+[docs/WINDOWS_BEHAVIOR.md](docs/WINDOWS_BEHAVIOR.md)에 기록한다.
 
-서버 연동의 예정 계약은 [docs/API_CONTRACT.md](docs/API_CONTRACT.md)에 있다. 서버는 기본 일정과 DB 수정값을 같은 순수 결합 함수로 처리해야 하며, 이 저장소는 DB 접속 정보나 운영 비밀값을 포함하지 않는다.
+서버 연동 계약은 [docs/API_CONTRACT.md](docs/API_CONTRACT.md)에 있다. 이 저장소는 DB 접속 정보나
+운영 비밀값을 포함하지 않는다.
+
+소수 교직원용 자체 서명판의 인증서 설치와 재빌드 방법은
+[docs/INTERNAL_SIGNED_INSTALL.md](docs/INTERNAL_SIGNED_INSTALL.md)에 있다.

@@ -1,6 +1,6 @@
 [package]
 name = "school-calendar-widget"
-version = "0.1.0"
+version = "0.3.0"
 description = "삼정중 학사일정 바탕화면 위젯"
 edition = "2021"
 
@@ -14,7 +14,11 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-autostart = "2"
-tauri-plugin-single-instance = "2"
-tauri-plugin-window-state = "2"
+tauri-plugin-store = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+keyring = "3"
+open = "5"
+reqwest = { version = "0.12", default-features = false, features = ["json", "native-tls"] }
+tokio = { version = "1", features = ["sync"] }
+url = "2"
